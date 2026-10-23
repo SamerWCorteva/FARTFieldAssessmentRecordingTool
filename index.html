@@ -43,6 +43,18 @@ a.brand, .brand-link { color:inherit; text-decoration:none; }
 .crow .chk { justify-content:center; }
 .map .pc.buf { background:repeating-linear-gradient(135deg, var(--bg), var(--bg) 5px, var(--line) 5px, var(--line) 6px); }
 .map .pc.buf span { font-style:italic; }
+/* subtle tints that show which plots belong to which rep (custom randomization only) */
+:root { --rep1:#e6f0fb; --rep2:#e8f5ec; --rep3:#f3ebf9; --rep4:#fdf1de; --rep5:#e3f4f3; --rep6:#fbe8ed; }
+@media (prefers-color-scheme: dark) { :root { --rep1:#1a2a3d; --rep2:#17291f; --rep3:#2a1f34; --rep4:#33281a; --rep5:#16302e; --rep6:#331d25; } }
+:root[data-contrast] { --rep1:#d3e5f8; --rep2:#d4eddc; --rep3:#e6d8f3; --rep4:#fbe3b8; --rep5:#cdebe9; --rep6:#f6d3dc; }
+.rp1 { --rc:var(--rep1); } .rp2 { --rc:var(--rep2); } .rp3 { --rc:var(--rep3); } .rp4 { --rc:var(--rep4); } .rp5 { --rc:var(--rep5); } .rp6 { --rc:var(--rep6); }
+.map .pc[class*="rp"] { background-color:var(--rc); }
+.map .pc.utc[class*="rp"] { background-image:linear-gradient(rgba(60,80,110,.2), rgba(60,80,110,.2)); outline:1.5px solid var(--utc-line); }
+.rand input[class*="rp"] { background:var(--rc); }
+.replegend { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; }
+.rl { display:inline-block; padding:.1rem .6rem; border-radius:999px; font-size:.78rem; border:1px solid var(--line); background:var(--rc); }
+.review tr.setrow td { background:var(--bg); font-weight:700; text-align:left; padding:.4rem .5rem; }
+.setname { font-weight:700; margin:12px 0 4px; }
 .seg { display:flex; gap:6px; margin:4px 0 12px; }
 .seg button { flex:1; min-height:42px; }
 .seg button.on { background:var(--accent-soft); color:var(--accent); border-color:var(--accent); }
@@ -264,7 +276,7 @@ details summary { cursor:pointer; font-weight:600; min-height:32px; }
 </div>
 <script>
 'use strict';
-const APP_VERSION = 30;
+const APP_VERSION = 31;
 const APP_BUILT = '23/10/2026'; // date this version was made // keep in step with VERSION in sw.js
 /* ---------- storage ---------- */
 const KEY = 'fieldAssessments.v1';
@@ -285,6 +297,7 @@ function migrateDb(d) { // keeps older data and backups working
       t.plotList.sort((x, y) => x.row - y.row || x.col - y.col);
       t.grid = { across: Math.max(...Object.values(seenN)), up: reps.length };
     }
+    if (t.randType === 'custom' && Array.isArray(t.plotList)) { t.plotList.forEach(p => { if (p.set == null) p.set = 0; }); if (!t.sets || !t.sets.length) t.sets = [{ name: '', grid: t.grid }]; }
     (t.assessments || []).forEach(a => (a.types || []).forEach(ty => { if (ty.sizeL !== undefined) { if (ty.sizeH === undefined) ty.sizeH = ty.sizeL; delete ty.sizeL; } }));
   });
   if (d.settings && d.settings.assessor) d.settings.assessor = String(d.settings.assessor).toUpperCase();
@@ -361,6 +374,7 @@ const MENUS = [
   { key: 'pgr', label: 'Growth regulator (PGR) specific', items: [{ n: 'Plant height', u: 'cm', min: 0 }, { n: 'Lodging %', u: '%', min: 0, max: 100 }, { n: 'Stem strength' }, { n: 'Tiller counts', u: 'no./m²', min: 0 }] },
   { key: 'biostimulant', label: 'Biostimulant specific', items: [{ n: 'Vigour', u: '0–9', min: 0, max: 9 }, { n: 'Biomass' }, { n: 'Canopy', u: '%', min: 0, max: 100 }, { n: 'Stress recovery' }] },
 ];
+MENUS.forEach(m => { if (m.key !== 'common' && m.key !== 'custom') m.items.push({ n: 'General Phyto', ...PH }); }); // available under every menu
 const MENU_FOR = { 'Fungicide': ['fungicide'], 'BioFungicide': ['fungicide'], 'Herbicide': ['herbicide'], 'SAT (Seed Applied Treatment)': ['sat'], 'Insecticide': ['insecticide'], 'Growth Regulator (PGR)': ['pgr'], 'Biostimulant': ['biostimulant'] };
 const CROPS = [
   ['Cereals', [['Winter Wheat', 'TRZAW'], ['Spring Wheat', 'TRZAS'], ['Winter Barley', 'HORVW'], ['Spring Barley', 'HORVS'], ['Winter Oats', 'AVESW'], ['Spring Oats', 'AVESA'], ['Winter Rye', 'SECCW'], ['Winter Triticale', 'TTLWI']]],
@@ -435,26 +449,35 @@ function plotNo(t, r, i) { // r, i are 0-based
   return (r + 1) * base + i + 1;
 }
 const isCustom = t => t.randType === 'custom' && Array.isArray(t.plotList); // custom randomization: plots typed in by hand
+// A custom trial can hold several crops / varieties that repeat the same plot numbers (two plots "101").
+// Each plot has a unique key = set * 100000 + plot number. Set 0 (and every regular trial) keeps the plain plot number.
+const PK = 100000, pn = key => key % PK, setIdx = key => Math.floor(key / PK);
+const setName = (t, i) => ((t.sets && t.sets[i]) || {}).name || (i ? `Set ${i + 1}` : '');
+const multiSet = t => isCustom(t) && (t.sets || []).length > 1;
+const plotTag = (t, key) => multiSet(t) ? `${pn(key)} · ${setName(t, setIdx(key))}` : String(pn(key));
+const repClass = rep => rep > 0 ? 'rp' + ((rep - 1) % 6 + 1) : '';
 function plots(t) { // plots that record data (buffers are not included)
-  if (isCustom(t)) return t.plotList.filter(p => p.trt > 0).map((p, i) => ({ plot: p.plot, rep: p.rep, pos: i + 1, trt: p.trt, row: p.row }));
+  if (isCustom(t)) return t.plotList.filter(p => p.trt > 0).map((p, i) => ({ plot: (p.set || 0) * PK + p.plot, rep: p.rep, pos: i + 1, trt: p.trt, row: p.row, set: p.set || 0 }));
   const out = [];
-  t.layout.forEach((row, r) => row.forEach((trt, i) => out.push({ plot: plotNo(t, r, i), rep: r + 1, pos: i + 1, trt: Number(trt) })));
+  t.layout.forEach((row, r) => row.forEach((trt, i) => out.push({ plot: plotNo(t, r, i), rep: r + 1, pos: i + 1, trt: Number(trt), set: 0 })));
   return out;
 }
-const bufferPlots = t => isCustom(t) ? t.plotList.filter(p => !(p.trt > 0)).map(p => ({ plot: p.plot, rep: p.rep, trt: 0 })) : [];
+const bufferPlots = t => isCustom(t) ? t.plotList.filter(p => !(p.trt > 0)).map(p => ({ plot: (p.set || 0) * PK + p.plot, rep: p.rep, trt: 0, set: p.set || 0 })) : [];
 const plotCount = t => plots(t).length;
-function layoutRows(t) { // for drawing the field: one row per physical row; buffers have trt 0
+function layoutSets(t) { // for drawing the field: one block per crop / variety, one row per physical row; buffers have trt 0
   if (isCustom(t)) {
-    const rws = [...new Set(t.plotList.map(p => p.row))].sort((x, y) => x - y);
-    return rws.map(r => ({ label: `Row ${r}`, cells: t.plotList.filter(p => p.row === r).sort((x, y) => x.col - y.col).map(p => ({ plot: p.plot, trt: p.trt > 0 ? p.trt : 0, rep: p.rep })) }));
+    return (t.sets || [{ name: '' }]).map((st, si) => {
+      const L = t.plotList.filter(p => (p.set || 0) === si), rws = [...new Set(L.map(p => p.row))].sort((x, y) => x - y);
+      return { name: st.name || (si ? `Set ${si + 1}` : ''), rows: rws.map(r => ({ label: '', cells: L.filter(p => p.row === r).sort((x, y) => x.col - y.col).map(p => ({ plot: p.plot, trt: p.trt > 0 ? p.trt : 0, rep: p.rep })) })) };
+    });
   }
-  return t.layout.map((row, r) => ({ label: `Rep ${r + 1}`, cells: row.map((k, i) => ({ plot: plotNo(t, r, i), trt: Number(k) })) }));
+  return [{ name: '', rows: t.layout.map((row, r) => ({ label: `Rep ${r + 1}`, cells: row.map((k, i) => ({ plot: plotNo(t, r, i), trt: Number(k) })) })) }];
 }
 function walkOrder(t, a) { // a.serpentine (set while assessing) wins over the trial's default; custom lists keep the order they were typed in
   const all = plots(t);
   if (!(a && a.serpentine !== undefined ? a.serpentine : t.serpentine)) return all;
   const out = [];
-  const grp = p => p.row != null ? p.row : p.rep; // custom grids reverse every other physical row
+  const grp = p => (p.set || 0) * 1e6 + (p.row != null ? p.row : p.rep); // custom grids reverse every other physical row
   [...new Set(all.map(grp))].sort((x, y) => x - y).forEach((r, k) => { const row = all.filter(p => grp(p) === r); if (k % 2 === 1) row.reverse(); out.push(...row); });
   return out;
 }
@@ -531,10 +554,11 @@ function outOfRange(ty, raw) {
 }
 const typeTitle = ty => [ty.name, ty.target, ty.leaf, ty.untreatedOnly ? 'Untreated' : ''].filter(Boolean).join(' – ');
 const typeLabel = ty => typeTitle(ty) + (ty.unit ? ` (${ty.unit})` : '');
-function typeStats(t, a, ty) {
+function typeStats(t, a, ty, si) {
   const groups = {};
   range(t.trts).forEach(k => groups[k] = { vals: [], nums: [] });
   plots(t).forEach(p => {
+    if (si != null && (p.set || 0) !== si) return;
     const g = groups[p.trt]; if (!g) return;
     const raw = val(a, p.plot, ty.id); const n = num(raw);
     g.vals.push({ ...p, raw, n }); if (n != null) g.nums.push(n);
@@ -691,6 +715,7 @@ function viewTrialForm(trial) {
   if (!d.layout) d.layout = blankLayout(d.reps, d.trts);
   d.randType = d.randType || 'rcb'; // 'rcb' = regular randomized complete block (default), 'custom' = plots typed in by hand
   d.plotList = d.plotList || [];
+  d.sets = (d.sets && d.sets.length ? d.sets : [{ name: '', grid: d.grid }]).map(x => ({ name: x.name || '', dims: x.grid || null, grid: null })); // crops / varieties of a custom randomization
 
   app.innerHTML = `
   <header class="top"><a class="back" href="${editing ? '#/trial/' + d.id : '#/'}">← Back</a><h1>${editing ? 'Edit trial' : 'Add trial'}</h1><a class="brand sm" href="#/" aria-label="FART – back to the home page"><b>FART</b><span>Field Assessment Recording Tool</span></a></header>
@@ -713,7 +738,7 @@ function viewTrialForm(trial) {
             <option value="__other" ${d.crop && !isKnownCrop(d.crop) ? 'selected' : ''}>Other (type it in)…</option></select></label>
         <label class="field" id="crop-other-wrap" ${d.crop && !isKnownCrop(d.crop) ? '' : 'hidden'}><span>Other crop</span>
           <input id="f-crop-other" value="${esc(d.crop && !isKnownCrop(d.crop) ? d.crop : '')}" placeholder="Crop name (CODE)" autocomplete="off"></label>
-        <label class="field"><span>Number of reps *</span><input id="f-reps" type="number" inputmode="numeric" min="1" max="50" value="${d.reps}" ${locked ? 'disabled' : ''}></label>
+        <label class="field" id="reps-wrap"><span>Number of reps *</span><input id="f-reps" type="number" inputmode="numeric" min="1" max="50" value="${d.reps}" ${locked ? 'disabled' : ''}></label>
         <label class="field"><span>Number of treatments *</span><input id="f-trts" type="number" inputmode="numeric" min="1" max="200" value="${d.trts}" ${locked ? 'disabled' : ''}></label>
         <label class="field"><span>Randomization</span>
           <select id="f-rtype" ${locked ? 'disabled' : ''}>
@@ -751,18 +776,23 @@ function viewTrialForm(trial) {
       </details>
       </div>
       <div id="cust-block" hidden>
-        <p class="small muted">Say how many plots there are across and up, then fill in the grid by hand. Use the tabs to enter each plot's treatment, rep and plot number. Type <b>B</b> as the treatment for an empty buffer plot – no values are recorded on it. Row 1 is at the bottom.</p>
+        <p class="small muted">Type your plots into the grid. Start with the <b>Plot no.</b> tab, then <b>Rep</b> (worked out for you from the treatments, so you only change it if it's wrong), then <b>Treatment</b>. Type <b>0</b> as the treatment for an empty buffer plot – no values are recorded on it.</p>
+        <div id="set-bar" class="seg" style="flex-wrap:wrap" hidden></div>
+        <label class="field"><span>Crop / variety name <span class="muted" style="font-weight:400">(optional)</span></span><input id="g-setname" placeholder="e.g. Barley, Wheat, Variety A" autocomplete="off"></label>
         <div class="grid2">
           <label class="field"><span>Plots across</span><input id="g-across" type="number" inputmode="numeric" min="1" max="60"></label>
           <label class="field"><span>Plots up</span><input id="g-up" type="number" inputmode="numeric" min="1" max="60"></label>
         </div>
-        <div class="seg" id="g-tabs"><button type="button" data-l="trt">Treatment</button><button type="button" data-l="rep">Rep</button><button type="button" data-l="plot">Plot no.</button></div>
+        <div class="seg" id="g-tabs"><button type="button" data-l="plot">Plot no.</button><button type="button" data-l="rep">Rep</button><button type="button" data-l="trt">Treatment</button></div>
         <div id="g-grid"></div>
+        <div id="rep-legend" class="replegend"></div>
         <p id="c-status" class="small"></p>
-        <div class="actions"><button id="g-autoplot" class="small" type="button">Auto-number plots</button><button id="g-autorep" class="small" type="button">Rep = row number</button><button id="g-clear" class="small danger" type="button">Clear tab</button></div>
+        <div class="actions"><button id="g-autoplot" class="small" type="button">Auto-number plots</button><button id="g-autorep" class="small" type="button">Recalculate reps</button><button id="g-clear" class="small danger" type="button">Clear tab</button></div>
+        <div class="actions"><button id="g-dup" class="small primary" type="button">Duplicate for another crop / variety</button><button id="g-delset" class="small danger" type="button" hidden>Delete this crop / variety</button></div>
+        <p class="small muted" style="margin-top:0">The same plot numbers can be used again in each crop / variety – duplicate the randomization and change what differs.</p>
         <details style="margin-top:8px"><summary>Faster: paste the current tab</summary>
-          <p class="small muted">One line per row, row 1 (the bottom row) first. Spaces, commas and tabs all work. On the Treatment tab use B for a buffer.</p>
-          <textarea id="c-paste" placeholder="3 1 B 2&#10;2 B 1 3&#10;…"></textarea>
+          <p class="small muted">One line per row, row 1 (the bottom row) first. Spaces, commas and tabs all work. On the Treatment tab use 0 for a buffer.</p>
+          <textarea id="c-paste" placeholder="101 102 103 104&#10;201 202 203 204"></textarea>
           <div class="actions"><button id="c-paste-go" class="small" type="button">Apply to this tab</button></div>
         </details>
       </div>
@@ -792,66 +822,91 @@ function viewTrialForm(trial) {
   const $ = id => document.getElementById(id);
   const custom = () => d.randType === 'custom';
 
-  /* ---- custom randomization: a grid of plots across x up ---- */
-  let layer = 'trt'; // which value the grid is showing: trt / rep / plot
+  /* ---- custom randomization: a grid of plots (across x up), one grid per crop / variety ---- */
+  let layer = 'plot', cur = 0; // layer = the tab being filled in: plot / rep / trt
+  const G = () => d.sets[cur].grid;
   const isInt = v => v !== '' && v != null && Number.isInteger(Number(v));
-  const blankCell = () => ({ plot: '', rep: '', trt: '', buf: false });
   const autoPlot = (row, col, across) => d.numbering === 'seq' ? (row - 1) * across + col : row * (across > 99 ? 1000 : 100) + col; // row 1 is the bottom row
-  function buildGrid(across, up, old) { // keeps what was typed, gives new cells a plot number and a rep (= row)
+  function buildGrid(across, up, old) { // keeps what was typed; new boxes get a plot number
     const cells = [];
-    for (let r = 0; r < up; r++) { cells.push([]); for (let c = 0; c < across; c++) { const o = old && old[r] && old[r][c]; cells[r].push(o ? { ...o } : { plot: autoPlot(r + 1, c + 1, across), rep: r + 1, trt: '', buf: false }); } }
+    for (let r = 0; r < up; r++) { cells.push([]); for (let c = 0; c < across; c++) { const o = old && old[r] && old[r][c]; cells[r].push(o ? { ...o } : { plot: autoPlot(r + 1, c + 1, across), rep: '', trt: '', buf: false, repManual: false }); } }
     return { across, up, cells };
   }
-  function gridFromList() {
-    const L = d.plotList || [];
-    if (L.length && L.every(p => p.row != null)) {
-      const across = (d.grid && d.grid.across) || Math.max(...L.map(p => p.col)), up = (d.grid && d.grid.up) || Math.max(...L.map(p => p.row));
+  // Reps are worked out from what is typed: go through the plots in plot-number order and start a new rep
+  // whenever a treatment turns up that the current rep already has. Typing a rep by hand overrides it for that plot.
+  function autoReps(g) {
+    const list = [];
+    g.cells.forEach((row, r) => row.forEach((cell, i) => list.push({ cell, ord: r * 1000 + i })));
+    const usable = list.filter(x => !x.cell.buf && isInt(x.cell.trt)).sort((x, y) => ((isInt(x.cell.plot) ? Number(x.cell.plot) : 1e9) - (isInt(y.cell.plot) ? Number(y.cell.plot) : 1e9)) || x.ord - y.ord);
+    let rp = 1, seen = new Set();
+    usable.forEach(x => { const k = Number(x.cell.trt); if (seen.has(k)) { rp++; seen = new Set(); } seen.add(k); if (!x.cell.repManual) x.cell.rep = rp; });
+    list.forEach(x => { if ((x.cell.buf || !isInt(x.cell.trt)) && !x.cell.repManual) x.cell.rep = ''; });
+  }
+  function gridFromList(si) {
+    const L = (d.plotList || []).filter(p => (p.set || 0) === si && p.row != null), dims = d.sets[si].dims;
+    if (L.length) {
+      const across = (dims && dims.across) || Math.max(...L.map(p => p.col)), up = (dims && dims.up) || Math.max(...L.map(p => p.row));
       const g = buildGrid(across, up);
-      g.cells.forEach(row => row.forEach(c => { c.plot = ''; c.rep = ''; }));
-      L.forEach(p => { if (g.cells[p.row - 1] && g.cells[p.row - 1][p.col - 1]) g.cells[p.row - 1][p.col - 1] = { plot: p.plot, rep: p.rep > 0 ? p.rep : '', trt: p.trt > 0 ? p.trt : '', buf: !(p.trt > 0) }; });
+      g.cells.forEach(row => row.forEach(c => { c.plot = ''; }));
+      L.forEach(p => { if (g.cells[p.row - 1] && g.cells[p.row - 1][p.col - 1]) g.cells[p.row - 1][p.col - 1] = { plot: p.plot, rep: p.rep > 0 ? p.rep : '', trt: p.trt > 0 ? p.trt : '', buf: !(p.trt > 0), repManual: false }; });
+      const stored = g.cells.map(row => row.map(c => c.rep)); autoReps(g);   // keep any rep that was set by hand
+      g.cells.forEach((row, r) => row.forEach((c, i) => { if (stored[r][i] !== '' && String(stored[r][i]) !== String(c.rep)) { c.rep = stored[r][i]; c.repManual = true; } }));
       return g;
     }
-    return buildGrid(Math.min(60, d.trts), Math.min(60, d.reps));
+    return buildGrid(clamp(d.trts, 1, 60), clamp(d.reps, 1, 60));
   }
-  const cellErr = (cell, r, c) => ({
+  const cellErr = (g, cell, r, c) => ({
     trt: !cell.buf && (!isInt(cell.trt) || Number(cell.trt) < 1 || Number(cell.trt) > d.trts),
-    rep: !cell.buf && (!isInt(cell.rep) || Number(cell.rep) < 1 || Number(cell.rep) > d.reps),
-    plot: !isInt(cell.plot) || d.grid.cells.some((row, rr) => row.some((o, cc) => (rr !== r || cc !== c) && isInt(o.plot) && Number(o.plot) === Number(cell.plot))),
+    rep: !cell.buf && isInt(cell.trt) && (!isInt(cell.rep) || Number(cell.rep) < 1),
+    plot: !isInt(cell.plot) || g.cells.some((row, rr) => row.some((o, cc) => (rr !== r || cc !== c) && isInt(o.plot) && Number(o.plot) === Number(cell.plot))),
   });
-  function gridStatus() {
-    const errCount = { trt: 0, rep: 0, plot: 0 }; let bufs = 0;
-    d.grid.cells.forEach((row, r) => row.forEach((cell, c) => { if (cell.buf) bufs++; const e = cellErr(cell, r, c); ['trt', 'rep', 'plot'].forEach(f => { if (e[f]) errCount[f]++; }); }));
+  function statusOf(g) {
+    const errCount = { trt: 0, rep: 0, plot: 0 }; let bufs = 0; const reps = new Set();
+    g.cells.forEach((row, r) => row.forEach((cell, c) => { if (cell.buf) bufs++; else if (isInt(cell.rep)) reps.add(Number(cell.rep)); const e = cellErr(g, cell, r, c); ['trt', 'rep', 'plot'].forEach(f => { if (e[f]) errCount[f]++; }); }));
     const bad = errCount.trt + errCount.rep + errCount.plot > 0, warn = [];
     if (!bad) {
-      const real = []; d.grid.cells.forEach(row => row.forEach(cell => { if (!cell.buf) real.push(cell); }));
-      range(d.reps).forEach(rp => range(d.trts).forEach(k => {
+      const real = []; g.cells.forEach(row => row.forEach(cell => { if (!cell.buf) real.push(cell); }));
+      [...reps].sort((x, y) => x - y).forEach(rp => range(d.trts).forEach(k => {
         const n = real.filter(x => Number(x.rep) === rp && Number(x.trt) === k).length;
         if (n === 0) warn.push(`Trt ${k} is not in rep ${rp}`); else if (n > 1) warn.push(`Trt ${k} appears ${n} times in rep ${rp}`);
       }));
     }
-    return { errCount, bad, warn, bufs, total: d.grid.across * d.grid.up };
+    return { errCount, bad, warn, bufs, total: g.across * g.up, reps: [...reps].sort((x, y) => x - y) };
+  }
+  function tintCells() { // subtle rep colours on the boxes
+    $('g-grid').querySelectorAll('input[data-r]').forEach(inp => {
+      const cell = G().cells[+inp.dataset.r][+inp.dataset.c];
+      inp.className = cell.buf ? 'buf' : repClass(Number(cell.rep));
+    });
   }
   function validateGrid() {
-    const st = gridStatus();
-    $('g-grid').querySelectorAll('input[data-r]').forEach(inp => { const r = +inp.dataset.r, c = +inp.dataset.c; inp.classList.toggle('err', cellErr(d.grid.cells[r][c], r, c)[layer]); });
-    $('g-tabs').querySelectorAll('button').forEach(b => { const n = st.errCount[b.dataset.l]; b.classList.toggle('on', b.dataset.l === layer); b.textContent = { trt: 'Treatment', rep: 'Rep', plot: 'Plot no.' }[b.dataset.l] + (n ? ` ⚠${n}` : ''); });
-    $('c-status').innerHTML = `<b>${st.total - st.bufs}</b> plot${st.total - st.bufs === 1 ? '' : 's'} · <b>${st.bufs}</b> buffer`
+    const g = G(), st = statusOf(g);
+    $('g-grid').querySelectorAll('input[data-r]').forEach(inp => { const r = +inp.dataset.r, c = +inp.dataset.c; inp.classList.toggle('err', cellErr(g, g.cells[r][c], r, c)[layer]); });
+    $('g-tabs').querySelectorAll('button').forEach(b => { const n = st.errCount[b.dataset.l]; b.classList.toggle('on', b.dataset.l === layer); b.textContent = { plot: 'Plot no.', rep: 'Rep', trt: 'Treatment' }[b.dataset.l] + (n ? ` ⚠${n}` : ''); });
+    $('rep-legend').innerHTML = st.reps.map(rp => `<span class="rl ${repClass(rp)}">Rep ${rp}</span>`).join('');
+    $('c-status').innerHTML = `<b>${st.total - st.bufs}</b> plot${st.total - st.bufs === 1 ? '' : 's'} · <b>${st.bufs}</b> buffer · <b>${st.reps.length}</b> rep${st.reps.length === 1 ? '' : 's'} worked out`
       + (st.bad ? ` · <span class="rep-bad">some boxes need filling in (red / ⚠ on the tabs)</span>` : st.warn.length ? `<br><span class="muted">Note: ${esc(st.warn.slice(0, 6).join('; '))}${st.warn.length > 6 ? ` … and ${st.warn.length - 6} more` : ''}</span>` : ' · <span class="rep-ok">✓</span>');
   }
+  function drawSets() {
+    const bar = $('set-bar'); bar.hidden = d.sets.length < 2;
+    bar.innerHTML = d.sets.map((st, i) => `<button type="button" data-s="${i}" class="${i === cur ? 'on' : ''}">${esc(st.name || 'Set ' + (i + 1))}</button>`).join('');
+    bar.querySelectorAll('button').forEach(b => b.onclick = () => { cur = +b.dataset.s; drawSets(); drawGrid(); });
+    $('g-setname').value = d.sets[cur].name; $('g-delset').hidden = !(d.sets.length > 1 && cur === d.sets.length - 1);
+  }
   function drawGrid() {
-    const g = d.grid; $('g-across').value = g.across; $('g-up').value = g.up;
+    const g = G(); $('g-across').value = g.across; $('g-up').value = g.up;
     $('g-grid').innerHTML = `<div class="scroll"><table class="rand"><tbody>${range(g.up).reverse().map(rn => {
       const r = rn - 1;
-      return `<tr><th class="l">Row ${rn}</th>${g.cells[r].map((cell, c) => {
+      return `<tr>${g.cells[r].map((cell, c) => {
         const small = layer === 'plot' ? (cell.buf ? 'Buffer' : (cell.trt ? 'T' + cell.trt : '')) : (cell.plot === '' ? '' : cell.plot);
         const v = layer === 'trt' ? (cell.buf ? 'B' : cell.trt) : layer === 'rep' ? cell.rep : cell.plot;
-        return `<td><div class="cell"><small>${esc(small)}</small><input data-r="${r}" data-c="${c}" tabindex="${2 + r * g.across + c}" value="${esc(v)}" inputmode="${layer === 'trt' ? 'text' : 'numeric'}" enterkeyhint="next" autocomplete="off" autocapitalize="characters" class="${cell.buf ? 'buf' : ''}"></div></td>`;
+        return `<td><div class="cell"><small>${esc(small)}</small><input data-r="${r}" data-c="${c}" tabindex="${2 + r * g.across + c}" value="${esc(v)}" inputmode="numeric" enterkeyhint="next" autocomplete="off"></div></td>`;
       }).join('')}</tr>`;
     }).join('')}</tbody></table></div>`;
     const boxes = [...$('g-grid').querySelectorAll('input[data-r]')];
     const move = dir => {
-      const cur = document.activeElement; if (!cur || cur.dataset.r === undefined) return;
-      let r = +cur.dataset.r, c = +cur.dataset.c;
+      const cur2 = document.activeElement; if (!cur2 || cur2.dataset.r === undefined) return;
+      let r = +cur2.dataset.r, c = +cur2.dataset.c;
       if (dir === 'right') { c++; if (c >= g.across) { c = 0; r++; } } else if (dir === 'left') { c--; if (c < 0) { c = g.across - 1; r--; } } else if (dir === 'up') r++; else r--;
       const n = $('g-grid').querySelector(`input[data-r="${r}"][data-c="${c}"]`); if (n) n.focus();
     };
@@ -859,23 +914,24 @@ function viewTrialForm(trial) {
       const r = +inp.dataset.r, c = +inp.dataset.c;
       inp.onfocus = () => setTimeout(() => inp.select(), 0);
       inp.oninput = () => {
-        const cell = d.grid.cells[r][c], v = inp.value.trim();
-        if (layer === 'trt') { if (/^(b|buf|buffer)$/i.test(v)) { cell.buf = true; cell.trt = ''; } else { cell.buf = false; cell.trt = v; } inp.classList.toggle('buf', cell.buf); }
-        else cell[layer] = v;
-        validateGrid();
-        const n = Number(v), max = layer === 'trt' ? d.trts : layer === 'rep' ? d.reps : 0;
-        if ((layer !== 'plot') && ((layer === 'trt' && cell.buf) || (Number.isInteger(n) && n >= 1 && n <= max && n * 10 > max))) move('right');
+        const cell = g.cells[r][c], v = inp.value.trim();
+        if (layer === 'trt') { if (v === '0' || /^(b|buf|buffer)$/i.test(v)) { cell.buf = true; cell.trt = ''; } else { cell.buf = false; cell.trt = v; } }
+        else if (layer === 'rep') { cell.rep = v; cell.repManual = v !== ''; }
+        else cell.plot = v;
+        autoReps(g); tintCells(); validateGrid();
+        const n = Number(v);
+        if (layer === 'trt' && (cell.buf || (Number.isInteger(n) && n >= 1 && n <= d.trts && n * 10 > d.trts))) move('right');
       };
       inp.onkeydown = e => { if (kb.key(e)) return; if (e.key === 'Enter') { e.preventDefault(); move('right'); } };
     });
     kb.use({ dirs: ['left', 'right', 'up', 'down'], go: move }, boxes);
-    validateGrid();
+    drawSets(); tintCells(); validateGrid();
   }
   function applyMode() {
     const c = custom();
-    $('rcb-block').hidden = c; $('cust-block').hidden = !c;
+    $('rcb-block').hidden = c; $('cust-block').hidden = !c; $('reps-wrap').hidden = c; // reps are worked out automatically in custom mode
     $('rand-title').textContent = c ? 'Randomization – custom' : 'Randomization – regular RCB';
-    if (c) { if (!d.grid || !d.grid.cells) d.grid = gridFromList(); drawGrid(); }
+    if (c) { d.sets.forEach((st, i) => { if (!st.grid) st.grid = gridFromList(i); }); if (cur >= d.sets.length) cur = 0; drawGrid(); }
   }
 
   function drawNames() {
@@ -951,7 +1007,7 @@ function viewTrialForm(trial) {
     const trts = clamp(parseInt($('f-trts').value, 10) || 1, 1, 200);
     if (reps === d.reps && trts === d.trts) return;
     d.reps = reps; d.trts = trts;
-    if (custom()) { drawNames(); if (d.grid && d.grid.cells) validateGrid(); return; } // the custom grid is kept; anything now out of range turns red
+    if (custom()) { drawNames(); if (d.sets.every(x => x.grid)) validateGrid(); return; } // the custom grid is kept; anything now out of range turns red
     d.layout = blankLayout(reps, trts);
     drawNames(); drawRand();
     toast('Layout cleared – fill in the randomization');
@@ -963,30 +1019,42 @@ function viewTrialForm(trial) {
   $('f-rtype').onchange = () => { d.randType = $('f-rtype').value; applyMode(); };
   $('g-tabs').querySelectorAll('button').forEach(b => b.onclick = () => { layer = b.dataset.l; drawGrid(); });
   const resizeGrid = () => {
-    const across = clamp(parseInt($('g-across').value, 10) || 1, 1, 60), up = clamp(parseInt($('g-up').value, 10) || 1, 1, 60);
-    if (across === d.grid.across && up === d.grid.up) return;
-    const lost = d.grid.cells.some((row, r) => row.some((cell, c) => (r >= up || c >= across) && (cell.trt !== '' || cell.buf)));
-    if (lost && !confirm('Making the grid smaller removes some plots you have already entered. Continue?')) { $('g-across').value = d.grid.across; $('g-up').value = d.grid.up; return; }
-    d.grid = buildGrid(across, up, d.grid.cells); drawGrid();
+    const g = G(), across = clamp(parseInt($('g-across').value, 10) || 1, 1, 60), up = clamp(parseInt($('g-up').value, 10) || 1, 1, 60);
+    if (across === g.across && up === g.up) return;
+    const lost = g.cells.some((row, r) => row.some((cell, c) => (r >= up || c >= across) && (cell.trt !== '' || cell.buf)));
+    if (lost && !confirm('Making the grid smaller removes some plots you have already entered. Continue?')) { $('g-across').value = g.across; $('g-up').value = g.up; return; }
+    d.sets[cur].grid = buildGrid(across, up, g.cells); autoReps(G()); drawGrid();
   };
   $('g-across').onchange = resizeGrid; $('g-up').onchange = resizeGrid;
-  $('g-autoplot').onclick = () => { d.grid.cells.forEach((row, r) => row.forEach((cell, c) => { cell.plot = autoPlot(r + 1, c + 1, d.grid.across); })); layer = 'plot'; drawGrid(); toast('Plot numbers filled in'); };
-  $('g-autorep').onclick = () => { d.grid.cells.forEach((row, r) => row.forEach(cell => { cell.rep = r + 1; })); layer = 'rep'; drawGrid(); toast('Rep set to the row number'); };
+  $('g-setname').oninput = e => { d.sets[cur].name = e.target.value; const b = $('set-bar').querySelector(`button[data-s="${cur}"]`); if (b) b.textContent = e.target.value.trim() || 'Set ' + (cur + 1); };
+  $('g-autoplot').onclick = () => { const g = G(); g.cells.forEach((row, r) => row.forEach((cell, c) => { cell.plot = autoPlot(r + 1, c + 1, g.across); })); autoReps(g); layer = 'plot'; drawGrid(); toast('Plot numbers filled in'); };
+  $('g-autorep').onclick = () => { const g = G(); g.cells.forEach(row => row.forEach(cell => { cell.repManual = false; })); autoReps(g); layer = 'rep'; drawGrid(); toast('Reps worked out again from the treatments'); };
   $('g-clear').onclick = () => {
-    if (!confirm(`Clear everything on the ${{ trt: 'Treatment', rep: 'Rep', plot: 'Plot no.' }[layer]} tab?`)) return;
-    d.grid.cells.forEach(row => row.forEach(cell => { if (layer === 'trt') { cell.trt = ''; cell.buf = false; } else cell[layer] = ''; })); drawGrid();
+    if (!confirm(`Clear everything on the ${{ plot: 'Plot no.', rep: 'Rep', trt: 'Treatment' }[layer]} tab?`)) return;
+    const g = G(); g.cells.forEach(row => row.forEach(cell => { if (layer === 'trt') { cell.trt = ''; cell.buf = false; } else if (layer === 'rep') { cell.rep = ''; cell.repManual = false; } else cell.plot = ''; })); autoReps(g); drawGrid();
+  };
+  $('g-dup').onclick = () => { // same plot numbers again for another crop / variety
+    if (!d.sets[0].name.trim() && d.sets.length === 1) { const n0 = (prompt('What is the randomization you have now called? (e.g. Barley)') || '').trim(); if (!n0) return; d.sets[0].name = n0; }
+    const name = (prompt('Name of the extra crop / variety? (e.g. Wheat)') || '').trim(); if (!name) return;
+    const src = G();
+    d.sets.push({ name, dims: null, grid: { across: src.across, up: src.up, cells: src.cells.map(row => row.map(c => ({ ...c }))) } });
+    cur = d.sets.length - 1; layer = 'plot'; drawGrid(); toast(`${name} added – change whatever differs`);
+  };
+  $('g-delset').onclick = () => {
+    if (!confirm(`Delete "${d.sets[cur].name || 'this crop / variety'}" and its plots?${locked ? ' Any values recorded on them will no longer show.' : ''}`)) return;
+    d.sets.pop(); cur = d.sets.length - 1; drawGrid();
   };
   $('c-paste-go').onclick = () => {
-    const lines = $('c-paste').value.split(/\r?\n/).map(l => l.trim()).filter(Boolean).map(l => l.split(/[\s,;]+/).filter(Boolean));
-    if (!lines.length) { alert('Paste one line per row first (row 1 at the bottom comes first).'); return; }
+    const g = G(), lines = $('c-paste').value.split(/\r?\n/).map(l => l.trim()).filter(Boolean).map(l => l.split(/[\s,;]+/).filter(Boolean));
+    if (!lines.length) { alert('Paste one line per row first (row 1, the bottom row, comes first).'); return; }
     const bad = [];
     lines.forEach((tokens, r) => tokens.forEach((tk, c) => {
-      if (r >= d.grid.up || c >= d.grid.across) { bad.push(`row ${r + 1}, box ${c + 1}`); return; }
-      const cell = d.grid.cells[r][c];
-      if (layer === 'trt') { if (/^(b|buf|buffer)$/i.test(tk)) { cell.buf = true; cell.trt = ''; } else if (isInt(tk)) { cell.buf = false; cell.trt = Number(tk); } else bad.push(tk); }
-      else if (isInt(tk)) cell[layer] = Number(tk); else bad.push(tk);
+      if (r >= g.up || c >= g.across) { bad.push(`row ${r + 1}, box ${c + 1}`); return; }
+      const cell = g.cells[r][c];
+      if (layer === 'trt') { if (tk === '0' || /^(b|buf|buffer)$/i.test(tk)) { cell.buf = true; cell.trt = ''; } else if (isInt(tk)) { cell.buf = false; cell.trt = Number(tk); } else bad.push(tk); }
+      else if (isInt(tk)) { cell[layer] = Number(tk); if (layer === 'rep') cell.repManual = true; } else bad.push(tk);
     }));
-    drawGrid();
+    autoReps(g); drawGrid();
     if (bad.length) alert(`Some entries did not fit or were not numbers: ${bad.slice(0, 6).join(', ')}${bad.length > 6 ? '…' : ''}`); else toast('Pasted');
   };
   $('f-serp').onchange = () => { d.serpentine = $('f-serp').checked; };
@@ -1019,14 +1087,21 @@ function viewTrialForm(trial) {
     if (!d.trialId) { alert('Please enter a Trial ID.'); $('f-id').focus(); return; }
     if (db.trials.some(t => t.id !== d.id && t.trialId.toLowerCase() === d.trialId.toLowerCase()) && !confirm(`A trial called "${d.trialId}" already exists. Save anyway?`)) return;
     if (custom()) {
-      const st = gridStatus();
-      if (st.total - st.bufs < 1) { showStep(3); alert('Fill in the custom randomization first – at least one plot that is not a buffer.'); return; }
-      if (st.bad) { showStep(3); validateGrid(); alert(`Some boxes still need filling in (Treatment: ${st.errCount.trt}, Rep: ${st.errCount.rep}, Plot no.: ${st.errCount.plot}). Every plot needs a treatment from 1 to ${d.trts} (or B for a buffer), a rep from 1 to ${d.reps} and a different plot number.`); return; }
-      if (st.warn.length && !confirm(`${st.warn.slice(0, 5).join('\n')}${st.warn.length > 5 ? '\n…' : ''}\n\nSave anyway? (If a treatment appears twice in a rep, the Review table only lists the first of those plots.)`)) return;
+      d.sets.forEach(x => { if (!x.grid) x.grid = gridFromList(d.sets.indexOf(x)); });
+      const sts = d.sets.map(x => statusOf(x.grid));
+      if (sts.every(x => x.total - x.bufs < 1)) { showStep(3); alert('Fill in the custom randomization first – at least one plot that is not a buffer.'); return; }
+      const badIdx = sts.findIndex(x => x.bad);
+      if (badIdx >= 0) {
+        const st = sts[badIdx]; cur = badIdx; layer = st.errCount.plot ? 'plot' : st.errCount.trt ? 'trt' : 'rep'; showStep(3); drawGrid();
+        alert(`${d.sets.length > 1 ? `"${d.sets[badIdx].name || 'Set ' + (badIdx + 1)}": ` : ''}some boxes still need filling in (Plot no.: ${st.errCount.plot}, Treatment: ${st.errCount.trt}, Rep: ${st.errCount.rep}). Every plot needs a different plot number and a treatment from 1 to ${d.trts} (or 0 for a buffer).`); return;
+      }
+      const warns = sts.flatMap((x, i) => x.warn.map(w => (d.sets.length > 1 ? `${d.sets[i].name || 'Set ' + (i + 1)}: ` : '') + w));
+      if (warns.length && !confirm(`${warns.slice(0, 5).join('\n')}${warns.length > 5 ? '\n…' : ''}\n\nSave anyway? (If a treatment appears twice in a rep, the Review table only lists the first of those plots.)`)) return;
       const before = trial && trial.plotList ? JSON.stringify(trial.plotList) : '';
       const list = [];
-      d.grid.cells.forEach((row, r) => row.forEach((cell, c) => list.push({ plot: Number(cell.plot), rep: cell.buf ? (Number(cell.rep) || 0) : Number(cell.rep), trt: cell.buf ? 0 : Number(cell.trt), row: r + 1, col: c + 1 })));
-      d.plotList = list; d.grid = { across: d.grid.across, up: d.grid.up };
+      d.sets.forEach((x, si) => x.grid.cells.forEach((row, r) => row.forEach((cell, c) => list.push({ plot: Number(cell.plot), rep: cell.buf ? (Number(cell.rep) || 0) : Number(cell.rep), trt: cell.buf ? 0 : Number(cell.trt), row: r + 1, col: c + 1, set: si }))));
+      d.plotList = list; d.sets = d.sets.map(x => ({ name: x.name.trim(), grid: { across: x.grid.across, up: x.grid.up } })); delete d.grid;
+      d.reps = Math.max(1, ...list.filter(p => p.trt > 0).map(p => p.rep)); // reps are whatever was worked out
       if (locked && before !== JSON.stringify(d.plotList) && !confirm('This trial has data. Changing the plots will re-assign existing plot data. Continue?')) return;
     } else {
       const sts = d.layout.map(row => repStatus(row, d.trts));
@@ -1034,7 +1109,7 @@ function viewTrialForm(trial) {
       if (sts.some(s => !s.ok) && !confirm('Some reps do not contain each treatment exactly once. Save anyway?')) return;
       if (locked && JSON.stringify(trial.layout) !== JSON.stringify(d.layout) && !confirm('This trial has data. Changing the randomization will re-assign existing plot data to the new treatments. Continue?')) return;
       d.layout = d.layout.map(row => row.map(Number));
-      delete d.plotList; delete d.grid;
+      delete d.plotList; delete d.grid; delete d.sets;
     }
     d.untreated = Number(d.untreated) || 0;
     d.trtNames = range(d.trts).map(k => (d.trtNames[k - 1] || '').trim());
@@ -1104,9 +1179,9 @@ function viewTrial(t) {
     <section class="card">
       <h2>Field layout</h2>
       <p class="small muted">Plot number and treatment for each plot.${t.untreated ? ' <span class="pill" style="background:var(--utc-bg);color:var(--ink)">Darker = untreated</span>' : ''}</p>
-      <div class="scroll"><table class="map"><tbody>
-        ${layoutRows(t).map(row => `<tr><th class="l">${row.label}</th>${row.cells.map(c => c.trt ? `<td><span class="pc ${c.trt === t.untreated ? 'utc' : ''}"><b>${c.plot}</b><span>T${c.trt}${isCustom(t) ? ' · R' + c.rep : (c.trt === t.untreated ? ' · UTC' : '')}</span></span></td>` : `<td><span class="pc buf"><b>${c.plot}</b><span>Buffer</span></span></td>`).join('')}</tr>`).reverse().join('')}
-      </tbody></table></div>
+      ${layoutSets(t).map(st => `${st.name ? `<div class="setname">${esc(st.name)}</div>` : ''}<div class="scroll"><table class="map"><tbody>
+        ${st.rows.map(row => `<tr>${row.label ? `<th class="l">${row.label}</th>` : ''}${row.cells.map(c => c.trt ? `<td><span class="pc ${c.trt === t.untreated ? 'utc' : ''} ${isCustom(t) ? repClass(c.rep) : ''}"><b>${c.plot}</b><span>T${c.trt}${isCustom(t) ? '' : (c.trt === t.untreated ? ' · UTC' : '')}</span></span></td>` : `<td><span class="pc buf"><b>${c.plot}</b><span>Buffer</span></span></td>`).join('')}</tr>`).reverse().join('')}
+      </tbody></table></div>${isCustom(t) ? `<div class="replegend">${[...new Set(st.rows.flatMap(r => r.cells.filter(c => c.trt).map(c => c.rep)))].sort((x, y) => x - y).map(rp => `<span class="rl ${repClass(rp)}">Rep ${rp}</span>`).join('')}</div>` : ''}`).join('')}
       ${t.trtNames.some(Boolean) ? `<p class="small" style="margin-top:12px">${range(t.trts).map(k => `<b>T${k}</b> ${esc(trtName(t, k) || '—')}${k === t.untreated ? ' (UTC)' : ''}`).join(' · ')}</p>` : ''}
     </section>
     <div class="card subtle" style="padding:12px;margin:16px 0 0">
@@ -1492,7 +1567,7 @@ function viewEntry(t, a, idx, focusAt) {
     <div class="small muted"><b>${esc(dmy(a.date))}</b> · ${done} of ${order.length} plots complete · page ${idx + 1} of ${order.length}</div>
 
     <section class="card plot-card" style="margin-top:8px">
-      <span class="plot-no">Plot ${p.plot}</span>
+      <span class="plot-no">Plot ${pn(p.plot)}</span>${multiSet(t) ? `<span class="pill">${esc(setName(t, p.set))}</span>` : ''}
       <span class="plot-meta">Rep <b>${p.rep}</b>${show ? ` · <b>${esc(trtLabel(t, p.trt))}</b>` : ''}</span>
       <span id="badge" class="done-badge"></span>
     </section>
@@ -1511,7 +1586,7 @@ function viewEntry(t, a, idx, focusAt) {
     <div class="actions" style="justify-content:space-between;align-items:center">
       <label class="small" style="display:flex;gap:.5rem;align-items:center">Go to
         <select id="jump" style="width:auto;min-height:36px">${order.map((q, j) =>
-          `<option value="${j}" ${j === idx ? 'selected' : ''}>${q.plot} · Rep ${q.rep}${plotComplete(t, a, q.plot) ? ' ✓' : plotStarted(a, q.plot) ? ' …' : ''}</option>`).join('')}</select></label>
+          `<option value="${j}" ${j === idx ? 'selected' : ''}>${plotTag(t, q.plot)} · Rep ${q.rep}${plotComplete(t, a, q.plot) ? ' ✓' : plotStarted(a, q.plot) ? ' …' : ''}</option>`).join('')}</select></label>
       <span style="display:flex;gap:14px;flex-wrap:wrap">
         ${locked ? '' : `<label class="chk small"><input type="checkbox" id="na" ${na ? 'checked' : ''}> Plot not assessed</label>`}
         <label class="chk small"><input type="checkbox" id="sun" ${db.settings.contrast ? 'checked' : ''}> ☀ High contrast</label>
@@ -1619,11 +1694,11 @@ function viewEntry(t, a, idx, focusAt) {
 
 /* ---------- box plot (SVG) ---------- */
 function quantile(sorted, q) { const pos = (sorted.length - 1) * q, lo = Math.floor(pos), hi = Math.ceil(pos); return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo); }
-function boxPlotSvg(t, a, ty, sel) { // sel = { plot, t } highlights one point
-  const st = typeStats(t, a, ty);
+function boxPlotSvg(t, a, ty, sel, si) { // sel = { plot, t } highlights one point
+  const st = typeStats(t, a, ty, si);
   const cols = range(t.trts).filter(k => applies(t, ty, k)).map(k => { const vals = st.groups[k].vals.filter(v => v.n != null); return { k, vals, v: vals.map(x => x.n).sort((x, y) => x - y) }; });
   const all = cols.flatMap(c => c.v);
-  const title = `<h3 style="margin:16px 0 4px">${esc(typeLabel(ty))}</h3>`;
+  const title = `<h3 style="margin:16px 0 4px">${esc(typeLabel(ty))}${multiSet(t) ? ' – ' + esc(setName(t, si)) : ''}</h3>`;
   if (!all.length) return `<div class="bp">${title}<p class="small muted">No values yet.</p></div>`;
   let lo = Math.min(...all), hi = Math.max(...all);
   if (lo === hi) { lo -= 1; hi += 1; }
@@ -1649,7 +1724,7 @@ function boxPlotSvg(t, a, ty, sel) { // sel = { plot, t } highlights one point
       pts += `<circle class="pt${isSel ? ' sel' : ''}" cx="${px}" cy="${y(v.n)}" r="${isSel ? 5.5 : 3}"/><circle class="hit" cx="${px}" cy="${y(v.n)}" r="10" fill="transparent" data-plot="${v.plot}" data-t="${ty.id}"/>`;
     });
   });
-  const info = picked ? `<b>Plot ${picked.plot}</b> · Rep ${picked.rep} · Trt ${picked.trt}${trtName(t, picked.trt) ? ' ' + esc(trtName(t, picked.trt)) : ''} · value <b>${esc(picked.raw)}</b> · <a href="#" data-goto>show in table</a>` : 'Tap a point to see which plot it is.';
+  const info = picked ? `<b>Plot ${pn(picked.plot)}</b> · Rep ${picked.rep} · Trt ${picked.trt}${trtName(t, picked.trt) ? ' ' + esc(trtName(t, picked.trt)) : ''} · value <b>${esc(picked.raw)}</b> · <a href="#" data-goto>show in table</a>` : 'Tap a point to see which plot it is.';
   return `<div class="bp">${title}<div class="scroll" style="border:0"><svg viewBox="0 0 ${W} ${H}" style="min-width:${Math.min(W, 300)}px;max-width:${W * 1.6}px" role="img" aria-label="Box plot of ${esc(typeLabel(ty))} by treatment">${g}${pts}</svg></div><div class="small bp-info">${info}</div></div>`;
 }
 
@@ -1671,7 +1746,7 @@ function viewReview(t, a) {
   <header class="top"><a class="back" href="#/trial/${t.id}">← ${esc(t.trialId)}</a><h1>Review · ${esc(dmy(a.date))}</h1><a class="brand sm" href="#/" aria-label="FART – back to the home page"><b>FART</b><span>Field Assessment Recording Tool</span></a></header>
   <main>
     <p class="small muted">${done} of ${n} plots complete. These are the raw values, grouped by treatment. Edit any value directly; tap a plot number to open that plot.</p>
-    ${bufferPlots(t).length ? `<p class="small muted">Buffer plots (no values recorded): ${bufferPlots(t).map(b => b.plot).sort((x, y) => x - y).join(', ')}</p>` : ''}
+    ${bufferPlots(t).length ? `<p class="small muted">Buffer plots (no values recorded): ${bufferPlots(t).sort((x, y) => x.plot - y.plot).map(b => plotTag(t, b.plot)).join(', ')}</p>` : ''}
     <div class="actions">
       <a class="btn" href="${base}/plot/${firstIncomplete(t, a)}">← Back to plots</a>
       <button id="xl" class="primary">Export…</button>
@@ -1688,27 +1763,27 @@ function viewReview(t, a) {
         <div class="scroll"><table class="review"><thead><tr>
           <th class="l">Trt</th>${range(t.reps).map(r => `<th>Rep ${r}</th>`).join('')}
         </tr></thead><tbody>
-          ${range(t.trts).filter(k => applies(t, ty, k)).map(k => `<tr class="${k === t.untreated ? 'utc' : ''}"><td class="l"><b>${k}</b>${k === t.untreated ? ' <span class="muted small">(UTC)</span>' : ''}${trtName(t, k) ? `<span class="tn">${esc(trtName(t, k))}</span>` : ''}</td>
+          ${(multiSet(t) ? t.sets.map((_, i) => i) : [0]).map(si => (multiSet(t) ? `<tr class="setrow"><td colspan="${t.reps + 1}">${esc(setName(t, si))}</td></tr>` : '') + range(t.trts).filter(k => applies(t, ty, k)).map(k => `<tr class="${k === t.untreated ? 'utc' : ''}"><td class="l"><b>${k}</b>${k === t.untreated ? ' <span class="muted small">(UTC)</span>' : ''}${trtName(t, k) ? `<span class="tn">${esc(trtName(t, k))}</span>` : ''}</td>
             ${range(t.reps).map(r => {
-              const pl = allPlots.find(q => q.rep === r && q.trt === k);
+              const pl = allPlots.find(q => (q.set || 0) === si && q.rep === r && q.trt === k);
               if (!pl) return `<td class="muted">—</td>`;
               const nsub = ty.noPhyto ? 1 : subsOf(ty);
               if (nsub > 1) { const arr = (a.data[pl.plot] && a.data[pl.plot]['_s_' + ty.id]) || [];
-                return `<td class="v" data-plot="${pl.plot}" data-t="${ty.id}"><div>${range(nsub).map(q => `<input class="sb" ${a.locked ? 'disabled' : ''} data-k="${q - 1}" value="${esc(arr[q - 1] ?? '')}" inputmode="decimal" aria-label="Plot ${pl.plot} subsample ${q}">`).join('')}</div>
-                  <a href="${base}/plot/${idxOf(pl.plot)}">${pl.plot}</a></td>`; }
-              return `<td class="v" data-plot="${pl.plot}" data-t="${ty.id}"><input ${a.locked ? 'disabled' : ''} value="${esc(val(a, pl.plot, ty.id))}" inputmode="decimal" aria-label="Plot ${pl.plot}">
-                <a href="${base}/plot/${idxOf(pl.plot)}">${pl.plot}</a></td>`;
-            }).join('')}</tr>`).join('')}
+                return `<td class="v" data-plot="${pl.plot}" data-t="${ty.id}"><div>${range(nsub).map(q => `<input class="sb" ${a.locked ? 'disabled' : ''} data-k="${q - 1}" value="${esc(arr[q - 1] ?? '')}" inputmode="decimal" aria-label="Plot ${pn(pl.plot)} subsample ${q}">`).join('')}</div>
+                  <a href="${base}/plot/${idxOf(pl.plot)}">${pn(pl.plot)}</a></td>`; }
+              return `<td class="v" data-plot="${pl.plot}" data-t="${ty.id}"><input ${a.locked ? 'disabled' : ''} value="${esc(val(a, pl.plot, ty.id))}" inputmode="decimal" aria-label="Plot ${pn(pl.plot)}">
+                <a href="${base}/plot/${idxOf(pl.plot)}">${pn(pl.plot)}</a></td>`;
+            }).join('')}</tr>`).join('')).join('')}
         </tbody></table></div>
       </section>`).join('')}
     ${Object.entries(a.data).some(([, r]) => r._note) ? `<section class="card"><h2>Plot notes</h2><ul>${
-      Object.entries(a.data).filter(([, r]) => r._note).sort((x, y) => x[0] - y[0]).map(([pl, r]) => `<li><a href="${base}/plot/${idxOf(+pl)}">Plot ${pl}</a>: ${esc(r._note)}</li>`).join('')}</ul></section>` : ''}
+      Object.entries(a.data).filter(([, r]) => r._note).sort((x, y) => x[0] - y[0]).map(([pl, r]) => `<li><a href="${base}/plot/${idxOf(+pl)}">Plot ${plotTag(t, +pl)}</a>: ${esc(r._note)}</li>`).join('')}</ul></section>` : ''}
   </main>`;
 
   let bpOn = false;
   function drawBoxPlots() {
     const el = document.getElementById('bp'); if (!bpOn) { el.innerHTML = ''; applySel(); return; }
-    el.innerHTML = a.types.map(ty => boxPlotSvg(t, a, ty, selPt)).join('');
+    el.innerHTML = a.types.map(ty => (multiSet(t) ? t.sets.map((_, i) => i) : [0]).map(si => boxPlotSvg(t, a, ty, selPt, si)).join('')).join('');
     applySel();
   }
   let selPt = null; // the point tapped on a box plot
@@ -1729,14 +1804,15 @@ function viewReview(t, a) {
   function refresh() {
     drawBoxPlots();
     const missing = new Set(), flagged = [], spreadKeys = new Set();
-    const link = pl => `<a href="${base}/plot/${idxOf(pl)}">${pl}</a>`;
+    const link = pl => `<a href="${base}/plot/${idxOf(pl)}">${pn(pl)}</a>`;
     a.types.forEach(ty => {
-      const grp = range(t.trts).filter(k => applies(t, ty, k)).map(k => ({ k, vs: allPlots.filter(p => p.trt === k).map(p => ({ plot: p.plot, n: num(val(a, p.plot, ty.id)) })).filter(v => v.n != null) }));
+      const grp = (multiSet(t) ? t.sets.map((_, i) => i) : [0]).flatMap(si => range(t.trts).filter(k => applies(t, ty, k)).map(k => ({ k, si, vs: allPlots.filter(p => p.trt === k && (p.set || 0) === si).map(p => ({ plot: p.plot, n: num(val(a, p.plot, ty.id)) })).filter(v => v.n != null) })));
       const every = grp.flatMap(g => g.vs.map(v => Math.abs(v.n)));
       const bounded = ty.min !== '' && ty.max !== '' && Number(ty.max) > Number(ty.min);
       const floor = OUTLIER_FLOOR * (bounded ? Number(ty.max) - Number(ty.min) : Math.max(0, ...every));
-      grp.forEach(({ k, vs }) => {
+      grp.forEach(({ k, si, vs }) => {
         if (vs.length < 2) return;
+        const tl = multiSet(t) ? ` (${esc(setName(t, si))})` : '';
         const far = vs.filter(v => { // with 3+ reps compare with the group median, so one wild value can't drag its neighbours along
           const m = vs.length === 2 ? vs.find(o => o !== v).n : medianOf(vs.map(o => o.n)), dev = Math.abs(v.n - m), lo = Math.min(Math.abs(v.n), Math.abs(m)), hi = Math.max(Math.abs(v.n), Math.abs(m));
           return dev > floor && (lo === 0 || hi / lo > OUTLIER_RATIO);
@@ -1744,8 +1820,8 @@ function viewReview(t, a) {
         if (!far.length) return;
         far.forEach(v => spreadKeys.add(`${v.plot}|${ty.id}`));
         const rest = vs.filter(o => !far.includes(o)).map(o => o.n);
-        flagged.push({ ty, html: vs.length === 2 ? `Trt ${k}: plot ${link(vs[0].plot)} = ${vs[0].n} and plot ${link(vs[1].plot)} = ${vs[1].n} are far apart`
-          : `Trt ${k}: ${far.map(v => `plot ${link(v.plot)} = ${v.n}`).join(', ')} – ${rest.length ? `far from the other reps (${rest.join(', ')})` : 'the reps are very spread out'}` });
+        flagged.push({ ty, html: vs.length === 2 ? `Trt ${k}${tl}: plot ${link(vs[0].plot)} = ${vs[0].n} and plot ${link(vs[1].plot)} = ${vs[1].n} are far apart`
+          : `Trt ${k}${tl}: ${far.map(v => `plot ${link(v.plot)} = ${v.n}`).join(', ')} – ${rest.length ? `far from the other reps (${rest.join(', ')})` : 'the reps are very spread out'}` });
       });
     });
     a.types.forEach(ty => allPlots.forEach(p => {
@@ -1761,7 +1837,7 @@ function viewReview(t, a) {
     document.getElementById('issues').innerHTML = (!miss.length && !flagged.length)
       ? `<b class="rep-ok">✓ No missing or flagged values.</b>`
       : `<h3>Check these</h3><ul class="issues small">
-          ${miss.length ? `<li><b>Missing data</b> in ${miss.length} plot${miss.length > 1 ? 's' : ''}: ${miss.map(pl => `<a href="${base}/plot/${idxOf(pl)}">${pl}</a>`).join(', ')}</li>` : ''}
+          ${miss.length ? `<li><b>Missing data</b> in ${miss.length} plot${miss.length > 1 ? 's' : ''}: ${miss.map(pl => `<a href="${base}/plot/${idxOf(pl)}">${pn(pl)}</a>`).join(', ')}</li>` : ''}
           ${flagged.map(f => `<li><b>${esc(typeTitle(f.ty))}</b> · ${f.html}</li>`).join('')}
         </ul>`;
   }
@@ -1812,7 +1888,7 @@ function excelFile(t, only) {
   const cols = expandCols(as).map(c => ({ ...c, label: `${c.label} ${dmy(c.a.date)}` }));
   const noteCols = as; // a plot-note column for every assessment date, even when empty
   const B = v => ({ v, b: true });
-  const cp = cropParts(t);
+  const cp = cropParts(t), ms = multiSet(t);
 
   // assessment details, repeated at the top of the Plot Data and Field Layout sheets
   const detail = (() => {
@@ -1831,25 +1907,30 @@ function excelFile(t, only) {
   })();
 
   // 1. Plot data (wide) – raw values as recorded
-  const wide = [...detail, [], [...['Plot', 'Rep', 'Trt', 'Treatment', 'Crop', 'Crop code'].map(B), ...cols.map(c => B(c.label)), ...noteCols.map(a => B(`Notes ${dmy(a.date)}`))]];
-  [...ps.map(p => ({ p })), ...bufferPlots(t).map(b => ({ b }))].sort((x, y) => (x.p || x.b).plot - (y.p || y.b).plot).forEach(({ p, b }) => b ? wide.push([b.plot, b.rep, null, 'Buffer', cp.name || null, cp.code || null, ...cols.map(() => 'Buffer'), ...noteCols.map(() => null)]) : wide.push([p.plot, p.rep, p.trt, trtName(t, p.trt) || null, cp.name || null, cp.code || null,
+  const wide = [...detail, [], [...['Plot', 'Rep', 'Trt', 'Treatment', 'Crop', 'Crop code', ...(ms ? ['Crop/Variety'] : [])].map(B), ...cols.map(c => B(c.label)), ...noteCols.map(a => B(`Notes ${dmy(a.date)}`))]];
+  [...ps.map(p => ({ p })), ...bufferPlots(t).map(b => ({ b }))].sort((x, y) => (x.p || x.b).plot - (y.p || y.b).plot).forEach(({ p, b }) => b ? wide.push([pn(b.plot), b.rep || null, null, 'Buffer', cp.name || null, cp.code || null, ...(ms ? [setName(t, b.set)] : []), ...cols.map(() => 'Buffer'), ...noteCols.map(() => null)]) : wide.push([pn(p.plot), p.rep, p.trt, trtName(t, p.trt) || null, cp.name || null, cp.code || null, ...(ms ? [setName(t, p.set)] : []),
     ...cols.map(c => applies(t, c.ty, p.trt) ? cell(colVal(c, p.plot)) : null), ...noteCols.map(a => (a.data[p.plot] && a.data[p.plot]._note) || null)]));
 
   // 2. Long format (one row per recorded value, one per subsample — good for pivot tables, R, ARM import)
-  const long = [['Trial', 'Crop', 'Crop code', 'Plot', 'Rep', 'Trt', 'Treatment', 'Untreated', 'Date', 'Assessor', 'Crop BBCH (majority)', 'Crop BBCH min', 'Crop BBCH max', 'Assessment', 'Assessment type', 'Target', 'Target stage (majority)', 'Target stage min', 'Target stage max', 'Weed height', 'Weed width', 'Weed size unit', 'Leaf level', 'Subsample', 'Unit', 'Value', 'Plot note'].map(B)];
+  const long = [['Trial', 'Crop', 'Crop code', ...(ms ? ['Crop/Variety'] : []), 'Plot', 'Rep', 'Trt', 'Treatment', 'Untreated', 'Date', 'Assessor', 'Crop BBCH (majority)', 'Crop BBCH min', 'Crop BBCH max', 'Assessment', 'Assessment type', 'Target', 'Target stage (majority)', 'Target stage min', 'Target stage max', 'Weed height', 'Weed width', 'Weed size unit', 'Leaf level', 'Subsample', 'Unit', 'Value', 'Plot note'].map(B)];
   as.forEach(a => ps.forEach(p => expandCols([a]).forEach(c => {
     const ty = c.ty; if (!applies(t, ty, p.trt)) return;
-    long.push([t.trialId, cp.name || null, cp.code || null, p.plot, p.rep, p.trt, trtName(t, p.trt) || null, p.trt === t.untreated ? 'Yes' : null, dmy(a.date), a.assessor || null, a.cropBBCH || null, a.cropBBCHMin || null, a.cropBBCHMax || null, ty.name, ty.atype || null, ty.target || null, ty.stage || null, ty.stageMin || null, ty.stageMax || null, ty.sizeH || null, ty.sizeW || null, (ty.sizeH || ty.sizeW) ? (ty.sizeUnit || 'cm') : null, ty.leaf || null, c.k === null ? null : c.k + 1, ty.unit || null, cell(colVal(c, p.plot)), (a.data[p.plot] && a.data[p.plot]._note) || null]);
+    long.push([t.trialId, cp.name || null, cp.code || null, ...(ms ? [setName(t, p.set)] : []), pn(p.plot), p.rep, p.trt, trtName(t, p.trt) || null, p.trt === t.untreated ? 'Yes' : null, dmy(a.date), a.assessor || null, a.cropBBCH || null, a.cropBBCHMin || null, a.cropBBCHMax || null, ty.name, ty.atype || null, ty.target || null, ty.stage || null, ty.stageMin || null, ty.stageMax || null, ty.sizeH || null, ty.sizeW || null, (ty.sizeH || ty.sizeW) ? (ty.sizeUnit || 'cm') : null, ty.leaf || null, c.k === null ? null : c.k + 1, ty.unit || null, cell(colVal(c, p.plot)), (a.data[p.plot] && a.data[p.plot]._note) || null]);
   })));
 
   // 3. Field layout
-  const lrw = layoutRows(t), maxc = Math.max(1, ...lrw.map(r => r.cells.length));
-  const lay = [...detail, [], [B('Rep'), B(''), ...range(maxc).map(i => B(`Position ${i}`))]];
-  for (let r = lrw.length - 1; r >= 0; r--) { // rep 1 at the bottom, like the field
-    lay.push([B(lrw[r].label), 'Plot', ...lrw[r].cells.map(c => c.plot)]);
-    lay.push([null, 'Trt', ...lrw[r].cells.map(c => c.trt || 'Buffer')]);
-    if (isCustom(t)) lay.push([null, 'Rep', ...lrw[r].cells.map(c => c.trt ? c.rep : null)]);
-  }
+  const lay = [...detail, []];
+  layoutSets(t).forEach(st => {
+    if (st.name) lay.push([B(st.name)]);
+    const maxc = Math.max(1, ...st.rows.map(r => r.cells.length));
+    lay.push([B(isCustom(t) ? '' : 'Rep'), B(''), ...range(maxc).map(i => B(`Position ${i}`))]);
+    for (let r = st.rows.length - 1; r >= 0; r--) { // bottom row first, like the field
+      lay.push([B(st.rows[r].label), 'Plot', ...st.rows[r].cells.map(c => c.plot)]);
+      lay.push([null, 'Trt', ...st.rows[r].cells.map(c => c.trt || 'Buffer')]);
+      if (isCustom(t)) lay.push([null, 'Rep', ...st.rows[r].cells.map(c => c.trt ? c.rep : null)]);
+    }
+    lay.push([]);
+  });
 
   // 4. Trial info
   const info = [[B('Trial ID'), t.trialId], [B('Description'), t.desc || null], [B('Untreated treatment'), t.untreated || null], [B('Trial type'), t.type || null], [B('Crop'), cp.name || null], [B('Crop code'), cp.code || null], [B('Reps'), t.reps], [B('Treatments'), t.trts],
@@ -1866,7 +1947,7 @@ function excelFile(t, only) {
   ]);
   return { blob, name: exportName(t, only) + '.xlsx' };
 }
-const exportName = (t, only) => `${t.trialId.replace(/[^\w.-]+/g, '_')}_${only ? 'assessment_' + dmy(only.date) : 'assessments_' + dmy(today())}`.replace(/\//g, '-');
+const exportName = (t, only) => `${t.trialId.replace(/[^\w.-]+/g, '_')}_${only ? 'Assessment_' + dmy(only.date) : 'Assessments_' + dmy(today())}`.replace(/\//g, '-');
 
 /* ---------- PDF REPORT (built here, no internet needed) ---------- */
 const CP1252 = { '–': 0x96, '—': 0x97, '‘': 0x91, '’': 0x92, '“': 0x93, '”': 0x94, '…': 0x85, '•': 0x95 };
@@ -1880,7 +1961,7 @@ function pdfStr(str) {
   return o;
 }
 function pdfFile(t, list) {
-  const cp = cropParts(t), cropTxt = cp.name ? `Crop: ${cp.name}${cp.code ? ' · crop code ' + cp.code : ''}` : '';
+  const ms = multiSet(t), cp = cropParts(t), cropTxt = cp.name ? `Crop: ${cp.name}${cp.code ? ' · crop code ' + cp.code : ''}` : '';
   const W = 842, H = 595, M = 36, pages = [];
   let cur = null, y = 0;
   const f1 = n => (Math.round(n * 10) / 10).toString();
@@ -1948,37 +2029,40 @@ function pdfFile(t, list) {
       line(bits.join('   ·   '), 9, false, 2);
     });
     y -= 6;
-    a.types.forEach(ty => {
+    a.types.forEach(ty => (ms ? t.sets.map((_, i) => i) : [0]).forEach(si => {
       const ks = range(t.trts).filter(k => applies(t, ty, k));
-      ensure(60); line(typeLabel(ty) + (ty.untreatedOnly ? '  (untreated plots only)' : ''), 11, true, 3);
+      ensure(60); line(typeLabel(ty) + (ty.untreatedOnly ? '  (untreated plots only)' : '') + (ms ? ' – ' + setName(t, si) : ''), 11, true, 3);
       const repW = Math.max(30, Math.min(80, (W - 2 * M - 170) / t.reps));
       const widths = [170, ...range(t.reps).map(() => repW)];
       const nsub = ty.noPhyto ? 1 : subsOf(ty);
       const cellOf = pl => { if (!pl) return ''; if (nsub > 1) return (((a.data[pl.plot] || {})['_s_' + ty.id]) || []).filter(x => x !== '').join(' / '); return val(a, pl.plot, ty.id); };
-      const rows = ks.map(k => [`${k} ${trtName(t, k)}${k === t.untreated ? ' (UTC)' : ''}`.trim(), ...range(t.reps).map(r => cellOf(plots(t).find(q => q.rep === r && q.trt === k)))]);
+      const rows = ks.map(k => [`${k} ${trtName(t, k)}${k === t.untreated ? ' (UTC)' : ''}`.trim(), ...range(t.reps).map(r => cellOf(plots(t).find(q => (q.set || 0) === si && q.rep === r && q.trt === k)))]);
       table(['Treatment', ...range(t.reps).map(r => 'Rep ' + r)], rows, widths);
-    });
+    }));
     // plot data, one row per plot (split across several tables when there are many columns)
     newPage(); line(`Plot data – ${dmy(a.date)}   (NA = plot not assessed)`, 12, true, 4);
-    const dc = [...expandCols([a]), { note: true, label: 'Plot note' }], prow = [...plots(t), ...bufferPlots(t)].sort((x, y2) => x.plot - y2.plot), avail = W - 2 * M - 200;
+    const dc = [...expandCols([a]), { note: true, label: 'Plot note' }], prow = [...plots(t), ...bufferPlots(t)].sort((x, y2) => x.plot - y2.plot), avail = W - 2 * M - 200 - (ms ? 60 : 0);
     const chunks = []; let curC = [], used = 0;
     dc.forEach(c => { const w = c.note ? 140 : 66; if (used + w > avail && curC.length) { chunks.push(curC); curC = []; used = 0; } curC.push(c); used += w; });
     if (curC.length) chunks.push(curC);
     chunks.forEach((chunk, i) => {
       if (i) ensure(80);
-      table(['Plot', 'Rep', 'Trt', 'Treatment', ...chunk.map(c => c.label)],
-        prow.map(p => !(p.trt > 0) ? [p.plot, p.rep, '', 'Buffer', ...chunk.map(c => c.note ? '' : 'Buffer')] : [p.plot, p.rep, p.trt, trtName(t, p.trt) + (p.trt === t.untreated ? ' *' : ''), ...chunk.map(c => c.note ? ((a.data[p.plot] || {})._note || '') : (applies(t, c.ty, p.trt) ? colVal(c, p.plot) : ''))]),
-        [40, 30, 30, 100, ...chunk.map(c => c.note ? 140 : 66)], 8);
+      table(['Plot', ...(ms ? ['Crop / variety'] : []), 'Rep', 'Trt', 'Treatment', ...chunk.map(c => c.label)],
+        prow.map(p => !(p.trt > 0) ? [pn(p.plot), ...(ms ? [setName(t, p.set)] : []), p.rep || '', '', 'Buffer', ...chunk.map(c => c.note ? '' : 'Buffer')] : [pn(p.plot), ...(ms ? [setName(t, p.set)] : []), p.rep, p.trt, trtName(t, p.trt) + (p.trt === t.untreated ? ' *' : ''), ...chunk.map(c => c.note ? ((a.data[p.plot] || {})._note || '') : (applies(t, c.ty, p.trt) ? colVal(c, p.plot) : ''))]),
+        [40, ...(ms ? [60] : []), 30, 30, 100, ...chunk.map(c => c.note ? 140 : 66)], 8);
     });
     const notes = Object.entries(a.data).filter(([, r]) => r._note).sort((x, y2) => x[0] - y2[0]);
-    if (notes.length) { ensure(40); line('Plot notes', 11, true, 3); notes.forEach(([pl, r]) => line(`Plot ${pl}: ${r._note}`, 9, false, 2)); }
+    if (notes.length) { ensure(40); line('Plot notes', 11, true, 3); notes.forEach(([pl, r]) => line(`Plot ${plotTag(t, +pl)}: ${r._note}`, 9, false, 2)); }
   });
   // field layout, rep 1 at the bottom
   newPage(sorted.length === 1 ? buildHdr(sorted[0]) : trialHdr); line('Field layout', 12, true, 4);
-  const lrw = layoutRows(t), maxc = Math.max(1, ...lrw.map(r => r.cells.length));
-  const lw = [50, ...range(maxc).map(() => Math.max(34, Math.min(60, (W - 2 * M - 50) / maxc)))];
-  const lrows = lrw.slice().reverse().map(r => [r.label, ...r.cells.map(c => c.trt ? `${c.plot} T${c.trt}${isCustom(t) ? ' R' + c.rep : ''}${c.trt === t.untreated ? '*' : ''}` : `${c.plot} Buffer`)]);
-  table(['', ...range(maxc).map(i => String(i))], lrows, lw, 8);
+  layoutSets(t).forEach(st => {
+    if (st.name) line(st.name, 10, true, 3);
+    const maxc = Math.max(1, ...st.rows.map(r => r.cells.length));
+    const lw = [isCustom(t) ? 4 : 50, ...range(maxc).map(() => Math.max(34, Math.min(60, (W - 2 * M - 50) / maxc)))];
+    const lrows = st.rows.slice().reverse().map(r => [r.label, ...r.cells.map(c => c.trt ? `${c.plot} T${c.trt}${isCustom(t) ? ' R' + c.rep : ''}${c.trt === t.untreated ? '*' : ''}` : `${c.plot} Buffer`)]);
+    table(['', ...range(maxc).map(i => String(i))], lrows, lw, 8);
+  });
   if (t.untreated) line('* UTC (untreated)', 8, false, 2);
   pages.forEach((pg, i) => { // header (assessment details + page x of y) on every page
     cur = pg.ops; let yy = H - M;
