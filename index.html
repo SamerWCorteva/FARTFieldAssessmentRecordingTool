@@ -276,11 +276,18 @@ details summary { cursor:pointer; font-weight:600; min-height:32px; }
 </div>
 <script>
 'use strict';
-const APP_VERSION = 33;
-const APP_BUILT = '23/10/2026'; // date this version was made // keep in step with VERSION in sw.js
+const APP_VERSION = 34;
+// keep APP_VERSION in step with VERSION in sw.js
+const cap = s => { s = String(s ?? ''); return s.charAt(0).toUpperCase() + s.slice(1); }; // first letter capital, used for titles and headers
 /* ---------- storage ---------- */
 const KEY = 'fieldAssessments.v1';
 const app = document.getElementById('app');
+// when this device last got a new version of the app (kept apart from trial data, so it is not part of backups)
+const APPINFO_KEY = 'fieldAssessments.app';
+let appInfo = (() => {
+  try { const x = JSON.parse(localStorage.getItem(APPINFO_KEY) || '{}'); if (x.version !== APP_VERSION) { x.version = APP_VERSION; x.installedAt = Date.now(); localStorage.setItem(APPINFO_KEY, JSON.stringify(x)); } return x; }
+  catch (e) { return { version: APP_VERSION, installedAt: Date.now() }; }
+})();
 let db = loadDB();
 let homeQuery = ''; // the text in the home page search box
 function applyContrast() { document.documentElement.toggleAttribute('data-contrast', !!db.settings.contrast); }
@@ -452,7 +459,7 @@ const isCustom = t => t.randType === 'custom' && Array.isArray(t.plotList); // c
 // A custom trial can hold several crops / varieties that repeat the same plot numbers (two plots "101").
 // Each plot has a unique key = set * 100000 + plot number. Set 0 (and every regular trial) keeps the plain plot number.
 const PK = 100000, pn = key => key % PK, setIdx = key => Math.floor(key / PK);
-const setName = (t, i) => ((t.sets && t.sets[i]) || {}).name || (i ? `Set ${i + 1}` : '');
+const setName = (t, i) => cap(((t.sets && t.sets[i]) || {}).name || (i ? `Set ${i + 1}` : ''));
 const multiSet = t => isCustom(t) && (t.sets || []).length > 1;
 const plotTag = (t, key) => multiSet(t) ? `${pn(key)} · ${setName(t, setIdx(key))}` : String(pn(key));
 const repClass = rep => rep > 0 ? 'rp' + ((rep - 1) % 6 + 1) : '';
@@ -552,7 +559,7 @@ function outOfRange(ty, raw) {
   if ((ty.min !== '' && ty.min != null && n < Number(ty.min)) || (ty.max !== '' && ty.max != null && n > Number(ty.max))) return 'bad';
   return '';
 }
-const typeTitle = ty => [ty.name, ty.target, ty.leaf, ty.untreatedOnly ? 'Untreated' : ''].filter(Boolean).join(' – ');
+const typeTitle = ty => cap([ty.name, ty.target, ty.leaf, ty.untreatedOnly ? 'Untreated' : ''].filter(Boolean).join(' – '));
 const typeLabel = ty => typeTitle(ty) + (ty.unit ? ` (${ty.unit})` : '');
 function typeStats(t, a, ty, si) {
   const groups = {};
@@ -655,6 +662,7 @@ function viewHome() {
     <section class="card subtle" style="margin-top:24px">
       <p id="offline-status" class="small"></p>
       <p id="app-ver" class="small muted"></p>
+      <div class="actions" style="margin-top:0"><button id="chk-upd" class="small" type="button">Check for updates</button><span id="upd-msg" class="small muted"></span></div>
       <h3>Backup &amp; move between devices</h3>
       <p class="small muted">All data is saved in this browser on this device. Export a backup regularly, and use Restore to load it on another device.</p>
       <label class="chk small" style="margin-bottom:12px"><input type="checkbox" id="contrast" ${db.settings.contrast ? 'checked' : ''}> ☀ Sunlight mode (high contrast, easier to read outdoors)</label>
@@ -667,6 +675,7 @@ function viewHome() {
     </section>
   </main>`;
   updateOfflineStatus(); showVersion();
+  document.getElementById('chk-upd').onclick = checkForUpdates;
   const q = document.getElementById('q');
   function applySearch() {
     const term = q ? q.value.trim().toLowerCase() : ''; homeQuery = q ? q.value : '';
@@ -1149,6 +1158,7 @@ function viewTrial(t) {
       <a class="btn primary" href="#/trial/${t.id}/a/new">+ New assessment date</a>
       <button id="xl" ${t.assessments.length ? '' : 'disabled'}>Export all…</button>
       <button id="share">Share trial</button>
+      <label class="btn">Import assessment<input type="file" class="import-assess" accept=".json,application/json" hidden></label>
       <a class="btn" href="#/trial/${t.id}/edit">Edit trial</a>
       <button id="arch">${t.archived ? 'Unarchive' : 'Archive trial'}</button>
       <button id="del" class="danger">Delete trial</button>
@@ -1174,6 +1184,7 @@ function viewTrial(t) {
           <a class="btn primary" href="#/trial/${t.id}/a/${a.id}">${!a.types.length ? 'Add assessments' : miss === 0 ? 'Open' : started ? 'Continue' : 'Start assessing'}</a>
           <a class="btn" href="#/trial/${t.id}/a/${a.id}/review">Review</a>
           <button data-xp="${a.id}">Export</button>
+          <button data-sh="${a.id}">Share</button>
           ${a.locked ? `<button data-unlock="${a.id}">Unlock</button>` : `${a.types.length && miss === 0 ? `<button data-lock="${a.id}">Lock</button>` : ''}<a class="btn" href="#/trial/${t.id}/a/${a.id}/edit">Edit</a>
           <button class="danger" data-del="${a.id}">Delete</button>`}
         </div>
@@ -1182,7 +1193,7 @@ function viewTrial(t) {
 
     <section class="card">
       <h2>Field layout</h2>
-      <p class="small muted">Plot number and treatment for each plot.${t.untreated ? ' <span class="pill" style="background:var(--utc-bg);color:var(--ink)">Darker = untreated</span>' : ''}</p>
+      <p class="small muted">Plot number and treatment for each plot.${t.untreated ? ' <span class="pill" style="background:var(--utc-bg);color:var(--ink)">Untreated = Darker</span>' : ''}</p>
       ${layoutSets(t).slice().reverse().map(st => `${st.name ? `<div class="setname">${esc(st.name)}</div>` : ''}<div class="scroll"><table class="map"><tbody>
         ${st.rows.map(row => `<tr>${row.label ? `<th class="l">${row.label}</th>` : ''}${row.cells.map(c => c.trt ? `<td><span class="pc ${c.trt === t.untreated ? 'utc' : ''} ${isCustom(t) ? repClass(c.rep) : ''}"><b>${c.plot}</b><span>T${c.trt}${isCustom(t) ? '' : (c.trt === t.untreated ? ' · UTC' : '')}</span></span></td>` : `<td><span class="pc buf"><b>${c.plot}</b><span>Buffer</span></span></td>`).join('')}</tr>`).reverse().join('')}
       </tbody></table></div>${isCustom(t) ? `<div class="replegend">${[...new Set(st.rows.flatMap(r => r.cells.filter(c => c.trt).map(c => c.rep)))].sort((x, y) => x - y).map(rp => `<span class="rl ${repClass(rp)}">Rep ${rp}</span>`).join('')}</div>` : ''}`).join('')}
@@ -1196,6 +1207,11 @@ function viewTrial(t) {
   </main>`;
   document.getElementById('xl').onclick = () => openExport(t, null);
   document.getElementById('share').onclick = () => shareTrial(t);
+  app.querySelectorAll('input.import-assess').forEach(inp => inp.onchange = async e => {
+    const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+    try { const d = JSON.parse(await f.text()); if (importAssessment(d, t)) viewTrial(t); } catch (err) { alert('That file is not a shared FART assessment.'); }
+  });
+  app.querySelectorAll('[data-sh]').forEach(b => b.onclick = () => shareAssessment(t, t.assessments.find(x => x.id === b.dataset.sh)));
   app.querySelectorAll('[data-lock]').forEach(b => b.onclick = () => {
     if (!confirm('Lock this date? Values cannot be changed until you unlock it.')) return;
     t.assessments.find(x => x.id === b.dataset.lock).locked = Date.now(); t.updated = Date.now(); save(); viewTrial(t);
@@ -1755,6 +1771,7 @@ function viewReview(t, a) {
     <div class="actions">
       <a class="btn" href="${base}/plot/${firstIncomplete(t, a)}">← Back to plots</a>
       <button id="xl" class="primary">Export…</button>
+      <button id="shr">Share</button>
       <button id="lock">${a.locked ? '🔒 Unlock' : 'Lock this date'}</button>
     </div>
     ${a.locked ? '<section class="card warnbox"><b>🔒 Locked.</b> Values cannot be changed until you unlock this date.</section>' : ''}
@@ -1868,6 +1885,7 @@ function viewReview(t, a) {
     inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } };
   });
   document.getElementById('xl').onclick = () => openExport(t, a);
+  document.getElementById('shr').onclick = () => shareAssessment(t, a);
   document.getElementById('lock').onclick = () => {
     if (!a.locked) { if (!confirm('Lock this date? Values cannot be changed until you unlock it.')) return; a.locked = Date.now(); }
     else { if (!confirm('Unlock this date so values can be edited?')) return; delete a.locked; }
@@ -1902,12 +1920,12 @@ function excelFile(t, only) {
   const detail = (() => {
     const rows = [[B('Trial'), t.trialId, B('Type'), t.type || null, B('Crop'), cp.name || null, B('Crop code'), cp.code || null, B('Reps × Trts'), `${t.reps} × ${t.trts}`]];
     as.forEach(a => {
-      rows.push([B('Assessment date'), dmy(a.date), B('Assessor'), a.assessor || null, B('Crop GS (BBCH) majority'), a.cropBBCH || null, B('min'), a.cropBBCHMin || null, B('max'), a.cropBBCHMax || null, B('Notes'), a.notes || null]);
+      rows.push([B('Assessment date'), dmy(a.date), B('Assessor'), a.assessor || null, B('Crop GS (BBCH) majority'), a.cropBBCH || null, B('Min'), a.cropBBCHMin || null, B('Max'), a.cropBBCHMax || null, B('Notes'), a.notes || null]);
       const seenT = new Set();
       a.types.filter(needsStage).forEach(ty => {
         const k = ty.kind + ':' + ty.target; if (seenT.has(k)) return; seenT.add(k);
         if (ty.stageMode === 'code') { rows.push([null, `Pest ${ty.target}`, B('Pest stage'), ty.stage || null]); return; }
-        rows.push([null, `${ty.kind === 'weed' ? 'Weed' : 'Pest'} ${ty.target}`, B('Growth stage majority'), ty.stage || null, B('min'), ty.stageMin || null, B('max'), ty.stageMax || null, ...(ty.kind === 'weed' ? [B(`Height (${ty.sizeUnit || 'cm'})`), ty.sizeH || null, B(`Width (${ty.sizeUnit || 'cm'})`), ty.sizeW || null] : [])]);
+        rows.push([null, `${ty.kind === 'weed' ? 'Weed' : 'Pest'} ${ty.target}`, B('Growth stage majority'), ty.stage || null, B('Min'), ty.stageMin || null, B('Max'), ty.stageMax || null, ...(ty.kind === 'weed' ? [B(`Height (${ty.sizeUnit || 'cm'})`), ty.sizeH || null, B(`Width (${ty.sizeUnit || 'cm'})`), ty.sizeW || null] : [])]);
       });
       rows.push([null, B('Assessments'), a.types.map(typeLabel).join('; ')]);
     });
@@ -2016,12 +2034,12 @@ function pdfFile(t, list) {
     if (lines.length > maxLines) { lines.length = maxLines; lines[maxLines - 1] = lines[maxLines - 1].replace(/.{0,2}$/, '') + '…'; }
     return lines;
   };
-  const trialHdr = [{ s: `${t.trialId} – FART Field Assessment Recording Tool`, size: 11, bold: true }, { s: [t.type, cropTxt, `${t.reps} reps × ${t.trts} treatments`].filter(Boolean).join('  ·  '), size: 8 }];
-  const assessDesc = ty => [typeLabel(ty), ty.untreatedOnly ? '[untreated only]' : '', subsOf(ty) > 1 && !ty.noPhyto ? `${subsOf(ty)} subsamples` : '', ty.noPhyto ? '[no phyto]' : '',
-    needsStage(ty) ? (ty.stageMode === 'code' ? `pest stage ${ty.stage || '–'}` : `${ty.kind === 'weed' ? 'weed' : 'pest'} GS ${rng(ty.stage || '–', ty.stageMin, ty.stageMax)}`) : '', ty.kind === 'weed' && (ty.sizeH || ty.sizeW) ? `height ${ty.sizeH || '–'} × width ${ty.sizeW || '–'} ${ty.sizeUnit || 'cm'}` : ''].filter(Boolean).join(' ');
+  const trialHdr = [{ s: `${t.trialId} – FART Field Assessment Recording Tool`, size: 11, bold: true }, { s: [t.type, cropTxt, `Reps: ${t.reps} · Treatments: ${t.trts}`].filter(Boolean).join('  ·  '), size: 8 }];
+  const assessDesc = ty => [typeLabel(ty), ty.untreatedOnly ? '[Untreated only]' : '', subsOf(ty) > 1 && !ty.noPhyto ? `Subsamples: ${subsOf(ty)}` : '', ty.noPhyto ? '[No phyto]' : '',
+    needsStage(ty) ? (ty.stageMode === 'code' ? `Pest stage ${ty.stage || '–'}` : `${ty.kind === 'weed' ? 'Weed' : 'Pest'} GS ${rng(ty.stage || '–', ty.stageMin, ty.stageMax)}`) : '', ty.kind === 'weed' && (ty.sizeH || ty.sizeW) ? `Height ${ty.sizeH || '–'} × Width ${ty.sizeW || '–'} ${ty.sizeUnit || 'cm'}` : ''].filter(Boolean).join(' ');
   const buildHdr = a => [
     { s: `${t.trialId} – Assessment ${dmy(a.date)}`, size: 11, bold: true },
-    { s: [t.type, cropTxt, `${t.reps} reps × ${t.trts} treatments`].filter(Boolean).join('  ·  '), size: 8 },
+    { s: [t.type, cropTxt, `Reps: ${t.reps} · Treatments: ${t.trts}`].filter(Boolean).join('  ·  '), size: 8 },
     { s: `Assessor: ${a.assessor || '–'}    Crop growth stage (BBCH): ${rng(a.cropBBCH || '–', a.cropBBCHMin, a.cropBBCHMax)}${a.notes ? '    Notes: ' + a.notes : ''}`, size: 8 },
     ...wrapText('Assessments: ' + a.types.map(assessDesc).join('  •  '), W - 2 * M, 7, 4).map(s => ({ s, size: 7 })),
   ];
@@ -2030,16 +2048,16 @@ function pdfFile(t, list) {
     line('Assessments on this date', 11, true, 3);
     a.types.forEach((ty, i) => {
       const bits = [`${i + 1}. ${typeLabel(ty)}`];
-      if (subsOf(ty) > 1) bits.push(`${subsOf(ty)} subsamples`);
+      if (subsOf(ty) > 1) bits.push(`Subsamples: ${subsOf(ty)}`);
       if (ty.noPhyto) bits.push('No phyto (0 on all plots)');
       if (needsStage(ty)) bits.push(ty.stageMode === 'code' ? `Pest stage ${ty.stage || '–'}` : `${ty.kind === 'weed' ? 'Weed' : 'Pest'} growth stage ${rng(ty.stage || '–', ty.stageMin, ty.stageMax)}`);
-      if (ty.kind === 'weed' && (ty.sizeH || ty.sizeW)) bits.push(`height ${ty.sizeH || '–'} × width ${ty.sizeW || '–'} ${ty.sizeUnit || 'cm'}`);
+      if (ty.kind === 'weed' && (ty.sizeH || ty.sizeW)) bits.push(`Height ${ty.sizeH || '–'} × Width ${ty.sizeW || '–'} ${ty.sizeUnit || 'cm'}`);
       line(bits.join('   ·   '), 9, false, 2);
     });
     y -= 6;
     a.types.forEach(ty => (ms ? t.sets.map((_, i) => i) : [0]).forEach(si => {
       const ks = range(t.trts).filter(k => applies(t, ty, k));
-      ensure(60); line(typeLabel(ty) + (ty.untreatedOnly ? '  (untreated plots only)' : '') + (ms ? ' – ' + setName(t, si) : ''), 11, true, 3);
+      ensure(60); line(typeLabel(ty) + (ty.untreatedOnly ? '  (Untreated plots only)' : '') + (ms ? ' – ' + setName(t, si) : ''), 11, true, 3);
       const repW = Math.max(30, Math.min(80, (W - 2 * M - 170) / t.reps));
       const widths = [170, ...range(t.reps).map(() => repW)];
       const nsub = ty.noPhyto ? 1 : subsOf(ty);
@@ -2048,7 +2066,7 @@ function pdfFile(t, list) {
       table(['Treatment', ...range(t.reps).map(r => 'Rep ' + r)], rows, widths);
     }));
     // plot data, one row per plot (split across several tables when there are many columns)
-    newPage(); line(`Plot data – ${dmy(a.date)}   (NA = plot not assessed)`, 12, true, 4);
+    newPage(); line(`Plot data – ${dmy(a.date)}   (NA = Plot not assessed)`, 12, true, 4);
     const dc = [...expandCols([a]), { note: true, label: 'Plot note' }], prow = [...plots(t), ...bufferPlots(t)].sort((x, y2) => x.plot - y2.plot), avail = W - 2 * M - 200 - (ms ? 60 : 0);
     const chunks = []; let curC = [], used = 0;
     dc.forEach(c => { const w = c.note ? 140 : 66; if (used + w > avail && curC.length) { chunks.push(curC); curC = []; used = 0; } curC.push(c); used += w; });
@@ -2071,7 +2089,7 @@ function pdfFile(t, list) {
     const lrows = st.rows.slice().reverse().map(r => [r.label, ...r.cells.map(c => c.trt ? `${c.plot} T${c.trt}${isCustom(t) ? ' R' + c.rep : ''}${c.trt === t.untreated ? '*' : ''}` : `${c.plot} Buffer`)]);
     table(['', ...range(maxc).map(i => String(i))], lrows, lw, 8);
   });
-  if (t.untreated) line('* UTC (untreated)', 8, false, 2);
+  if (t.untreated) line('* UTC (Untreated)', 8, false, 2);
   pages.forEach((pg, i) => { // header (assessment details + page x of y) on every page
     cur = pg.ops; let yy = H - M;
     pg.hdr.forEach((l, j) => { yy -= l.size; text(M, yy, fit(l.s, W - 2 * M - (j === 0 ? 90 : 0), l.size, l.bold), l.size, l.bold); yy -= 3; });
@@ -2104,6 +2122,28 @@ function shareTrial(t) { // the whole trial (layout, assessments and values) as 
   downloadMany([{ blob: new Blob([JSON.stringify(payload)], { type: 'application/json' }), name }]);
   toast('Trial file ready – send it to the other device');
 }
+const randSig = t => isCustom(t) // identifies the randomization: the same plots with the same treatments
+  ? JSON.stringify(['c', t.trts, (t.plotList || []).map(p => [p.set || 0, p.plot, p.trt, p.row, p.col])])
+  : JSON.stringify(['r', t.reps, t.trts, t.numbering, t.layout]);
+function shareAssessment(t, a) {
+  const payload = { fart: 'assessment-share', appVersion: APP_VERSION, sharedAt: Date.now(), trial: { trialId: t.trialId, sig: randSig(t) }, assessment: a };
+  const name = `${t.trialId.replace(/[^\w.-]+/g, '_')}_FART_Assessment_${dmy(a.date).replace(/\//g, '-')}_shared.json`;
+  downloadMany([{ blob: new Blob([JSON.stringify(payload)], { type: 'application/json' }), name }]);
+  toast('Assessment file ready – send it to the other device');
+}
+function importAssessment(d, t) { // t = the trial it is being imported into (or null: find it on this device)
+  if (d.fart !== 'assessment-share' || !d.assessment || !d.trial) { alert('That file is not a shared FART assessment.'); return false; }
+  const idMatch = x => x.trialId.toLowerCase() === String(d.trial.trialId).toLowerCase();
+  const target = t || db.trials.find(x => idMatch(x) && randSig(x) === d.trial.sig);
+  if (!target || !idMatch(target)) { alert(`This assessment is from trial ${d.trial.trialId}.\n\nAn assessment can only be imported into the same trial. ${t ? 'This is a different trial.' : "That trial isn't on this device."}`); return false; }
+  if (randSig(target) !== d.trial.sig) { alert(`The trial ID matches (${target.trialId}) but the randomization is different, so this assessment can't be imported.`); return false; }
+  const ia = d.assessment, have = target.assessments.find(x => x.id === ia.id);
+  if (!have) { target.assessments.push(ia); target.updated = Date.now(); save(); toast(`Assessment ${dmy(ia.date)} imported`); return target; }
+  if (!confirm(`The ${dmy(ia.date)} assessment is already in ${target.trialId}.\n\nMerge the shared copy into it? Values you don't have yet are added; anything you already entered is kept as it is.`)) return false;
+  const r = mergeTrial(target, { assessments: [ia] }); save();
+  alert(`${dmy(ia.date)}: ${r.filled} value${r.filled === 1 ? '' : 's'} added${r.conflicts ? `, ${r.conflicts} different value${r.conflicts === 1 ? '' : 's'} left as yours` : ''}${r.lockedSkipped ? '. That date is locked here, so it was left alone' : ''}.`);
+  return target;
+}
 function mergeTrial(local, inc) { // bring another device's values into this copy of the trial; nothing of yours is overwritten
   const r = { addedDates: 0, filled: 0, conflicts: 0, lockedSkipped: 0 };
   (inc.assessments || []).forEach(ia => {
@@ -2132,6 +2172,7 @@ function mergeTrial(local, inc) { // bring another device's values into this cop
 async function importShared(file) {
   try {
     const d = JSON.parse(await file.text());
+    if (d.fart === 'assessment-share') { if (importAssessment(d, null)) viewHome(); return; }
     const list = d.fart === 'trial-share' && d.trial ? [d.trial] : Array.isArray(d.trials) ? d.trials : null;
     if (!list || !list.length) throw new Error('not a trial file');
     const msgs = [];
@@ -2267,11 +2308,31 @@ function zipStore(files, type) { // uncompressed ZIP — valid for .xlsx
 /* ---------- app version ---------- */
 function showVersion() {
   const el = document.getElementById('app-ver'); if (!el) return;
-  el.textContent = `App version ${APP_VERSION} · updated ${APP_BUILT}`;
+  const base = `App version ${APP_VERSION} · Last updated ${fmtDT(appInfo.installedAt)}${appInfo.checkedAt ? ` · Last checked ${fmtDT(appInfo.checkedAt)}` : ''}`;
+  el.textContent = base;
   if (window.caches) caches.keys().then(keys => {
     const newest = Math.max(0, ...keys.filter(k => k.startsWith('field-assessments-v')).map(k => parseInt(k.split('-v')[1], 10) || 0));
-    if (newest > APP_VERSION && document.getElementById('app-ver')) document.getElementById('app-ver').textContent += ` · version ${newest} has been downloaded – close and reopen the app to use it`;
+    if (newest > APP_VERSION && document.getElementById('app-ver')) document.getElementById('app-ver').textContent = base + ` · Version ${newest} has been downloaded – close and reopen the app to use it`;
   }).catch(() => {});
+}
+async function checkForUpdates() { // asks the web address for a newer copy of the app and installs it
+  const msg = document.getElementById('upd-msg'), say = t => { if (msg) msg.textContent = t; };
+  if (!('serviceWorker' in navigator) || location.protocol === 'file:') { say('Updates can only be checked when the app is opened from its web address.'); return; }
+  say('Checking…');
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (!reg) { say('The app is not set up for offline use on this device yet – reload it once with internet.'); return; }
+    let found = false; const onFound = () => { found = true; };
+    reg.addEventListener('updatefound', onFound);
+    await reg.update(); await new Promise(r => setTimeout(r, 1500));
+    reg.removeEventListener('updatefound', onFound);
+    appInfo.checkedAt = Date.now(); try { localStorage.setItem(APPINFO_KEY, JSON.stringify(appInfo)); } catch (e) {}
+    if (found || reg.installing || reg.waiting) {
+      say('New version found – installing…');
+      await new Promise(res => { const t = setTimeout(res, 6000); navigator.serviceWorker.addEventListener('controllerchange', () => { clearTimeout(t); res(); }, { once: true }); });
+      location.reload();
+    } else { say(`You're up to date (version ${APP_VERSION}).`); showVersion(); }
+  } catch (e) { say("Couldn't check – no connection to the app's web address."); }
 }
 
 /* ---------- offline install ---------- */

@@ -1,11 +1,11 @@
 // Keeps a copy of the app on the device so it opens with no internet.
 // When you change any app file, bump VERSION so devices pick up the new copy.
-const VERSION = 'v33';
+const VERSION = 'v34';
 const CACHE = 'field-assessments-' + VERSION;
 const FILES = ['./index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES.map(f => new Request(f, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', e => {
