@@ -28,10 +28,13 @@
 .sec > summary::before { content:'▸'; color:var(--accent); }
 .sec[open] > summary::before { content:'▾'; }
 .sec-name { flex:1; }
-.sec-btns { display:flex; gap:6px; }
+.sec-btns { display:flex; gap:8px; align-items:center; margin-left:auto; }
+.icon-btn { min-height:32px; width:32px; padding:0; border-radius:8px; }
 .tc-link { display:block; color:inherit; text-decoration:none; }
 .trial-card .mv { display:flex; align-items:center; gap:8px; margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }
 .trial-card .mv select { width:auto; min-height:36px; flex:1; }
+a.brand, .brand-link { color:inherit; text-decoration:none; }
+.brand-link { display:block; }
 .brand.sm { flex:none; margin-left:auto; text-align:right; }
 .brand.sm b { font-size:1.05rem; letter-spacing:.06em; }
 .brand.sm span { font-size:.5rem; max-width:5.3rem; margin-left:auto; line-height:1.1; letter-spacing:.02em; }
@@ -249,7 +252,7 @@ details summary { cursor:pointer; font-weight:600; min-height:32px; }
 </div>
 <script>
 'use strict';
-const APP_VERSION = 25; // keep in step with VERSION in sw.js
+const APP_VERSION = 26; // keep in step with VERSION in sw.js
 /* ---------- storage ---------- */
 const KEY = 'fieldAssessments.v1';
 const app = document.getElementById('app');
@@ -324,7 +327,7 @@ const FUNG_PESTS = [
 ];
 const SAT_PESTS = [['SAT pests', [['USTINH', 'Loose Smut'], ['FUSASP', 'Fusarium spp.'], ['MONGNI', 'Microdochium Seedling Blight'], ['BYDV00', 'BYDV'], ['SEPTTR', 'Septoria'], ['ERYSGR', 'Powdery Mildew'], ['PUCCST', 'Yellow Rust'], ['RHYNSE', 'Rhynchosporium'], ['PYRNTE', 'Net Blotch'], ['RAMUCC', 'Ramularia']]]];
 const PEST_CODES = ['Mixed', 'LESVIS', 'PYCVIS', 'PUSVIS']; // pest stage choices for fungicide trials
-const LEAVES = ['Leaf 1', 'Leaf 2', 'Leaf 3', 'Leaf 4', 'Leaf 5', 'Leaf 6'];
+const LEAVES = ['Leaf 1', 'Leaf 2', 'Leaf 3', 'Leaf 4', 'Leaf 5', 'Leaf 6', 'Ear']; // 'leaf level' for fungicide assessments
 // n=name u=unit min/max  tg=needs a weed/pest  leaf=needs leaf level  untr=untreated plots only
 const PH = { u: '%', min: 0, max: 100, phyto: 1 };
 const MENUS = [
@@ -531,6 +534,10 @@ function typeStats(t, a, ty) {
 
 /* ---------- router ---------- */
 window.addEventListener('hashchange', render);
+document.addEventListener('click', e => { // tapping FART while already on the home page just refreshes it
+  const a = e.target.closest && e.target.closest('a.brand, a.brand-link');
+  if (a && (location.hash === '' || location.hash === '#' || location.hash === '#/')) { e.preventDefault(); homeQuery = ''; viewHome(); window.scrollTo(0, 0); }
+});
 function render() {
   const p = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
   window.scrollTo(0, 0); kb.hide(); kb.leave();
@@ -559,7 +566,7 @@ function viewHome() {
   const trials = db.trials.filter(t => !t.archived).sort((a, b) => (b.updated || 0) - (a.updated || 0));
   const archived = db.trials.filter(t => t.archived).sort((a, b) => (b.archived || 0) - (a.archived || 0));
   app.innerHTML = `
-  <header class="top"><h1 class="brand"><b>FART</b><span>Field Assessment Recording Tool</span></h1><a class="btn primary small" href="#/trial/new">+ Add trial</a></header>
+  <header class="top"><h1 class="brand"><a class="brand-link" href="#/" aria-label="FART – home"><b>FART</b><span>Field Assessment Recording Tool</span></a></h1><a class="btn primary small" href="#/trial/new">+ Add trial</a></header>
   <main>
     ${db.trials.length ? (() => { const lb = db.settings.lastBackup, days = lb ? Math.floor((Date.now() - lb) / 864e5) : null, stale = !lb || days >= 7;
       return `<div class="card ${stale ? 'warnbox' : ''}"><div class="arow"><div><b>Backup</b><div class="small">Last backup: ${lb ? (days === 0 ? 'today' : days === 1 ? '1 day ago' : days + ' days ago') : 'never'}</div></div>
@@ -577,7 +584,7 @@ function viewHome() {
           <button id="new-sec" type="button">+ New section</button></div>
         <p id="nomatch" class="muted" hidden>No trials match your search.</p>`
         + secs.map(sc => `<details class="card sec" data-sec="${sc.id}" ${sc.collapsed ? '' : 'open'}><summary><span class="sec-name">${esc(sc.name)}</span><span class="pill">${inSec(sc.id).length}</span>
-            <span class="sec-btns"><button class="small" data-ren="${sc.id}" type="button">Rename</button><button class="small danger" data-delsec="${sc.id}" type="button">Delete</button></span></summary>
+            <span class="sec-btns"><button class="small" data-ren="${sc.id}" type="button">Rename</button><button class="icon-btn danger" data-delsec="${sc.id}" type="button" title="Delete section" aria-label="Delete section"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/></svg></button></span></summary>
             <div class="list" style="margin-top:12px">${inSec(sc.id).map(card).join('') || '<p class="small muted">No trials in this section yet. Open a trial and choose this section.</p>'}</div></details>`).join('')
         + (loose.length ? `${secs.length ? '<h3 id="other-h" style="margin:18px 0 8px">Other trials</h3>' : ''}<div id="other-list" class="list">${loose.map(card).join('')}</div>` : '');
     })()
@@ -650,7 +657,7 @@ function viewTrialForm(trial) {
   if (!d.layout) d.layout = blankLayout(d.reps, d.trts);
 
   app.innerHTML = `
-  <header class="top"><a class="back" href="${editing ? '#/trial/' + d.id : '#/'}">← Back</a><h1>${editing ? 'Edit trial' : 'Add trial'}</h1><div class="brand sm" aria-label="FART – Field Assessment Recording Tool"><b>FART</b><span>Field Assessment Recording Tool</span></div></header>
+  <header class="top"><a class="back" href="${editing ? '#/trial/' + d.id : '#/'}">← Back</a><h1>${editing ? 'Edit trial' : 'Add trial'}</h1><a class="brand sm" href="#/" aria-label="FART – back to the home page"><b>FART</b><span>Field Assessment Recording Tool</span></a></header>
   <main>
     <div class="steps" id="steps">
       <button class="step" data-st="1" type="button"><b>1</b> Describe</button>
@@ -866,7 +873,7 @@ function viewTrial(t) {
   const n = t.reps * t.trts;
   const as = [...t.assessments].sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.created - a.created);
   app.innerHTML = `
-  <header class="top"><a class="back" href="#/">← Trials</a><h1>${esc(t.trialId)}</h1><div class="brand sm" aria-label="FART – Field Assessment Recording Tool"><b>FART</b><span>Field Assessment Recording Tool</span></div></header>
+  <header class="top"><a class="back" href="#/">← Trials</a><h1>${esc(t.trialId)}</h1><a class="brand sm" href="#/" aria-label="FART – back to the home page"><b>FART</b><span>Field Assessment Recording Tool</span></a></header>
   <main>
     ${t.desc ? `<p class="muted">${esc(t.desc)}</p>` : ''}
     ${(t.type || t.crop || t.archived) ? `<div class="pills" style="margin:0 0 .5rem">${t.archived ? '<span class="pill warn">Archived</span>' : ''}${t.type ? `<span class="pill">${esc(t.type)}</span>` : ''}${t.crop ? `<span class="pill">${esc(t.crop)}</span>` : ''}</div>` : ''}
@@ -974,7 +981,7 @@ function viewAssessForm(t, a, startStep) {
   let step = startStep || 1;
 
   app.innerHTML = `
-  <header class="top"><a class="back" href="${back}">← ${esc(t.trialId)}</a><h1>${editing ? 'Edit assessment date' : 'New assessment date'}</h1><div class="brand sm" aria-label="FART – Field Assessment Recording Tool"><b>FART</b><span>Field Assessment Recording Tool</span></div></header>
+  <header class="top"><a class="back" href="${back}">← ${esc(t.trialId)}</a><h1>${editing ? 'Edit assessment date' : 'New assessment date'}</h1><a class="brand sm" href="#/" aria-label="FART – back to the home page"><b>FART</b><span>Field Assessment Recording Tool</span></a></header>
   <main>
     <div class="steps">
       <button class="step" data-st="1" type="button"><b>1</b> Date &amp; crop stage</button>
@@ -1009,6 +1016,8 @@ function viewAssessForm(t, a, startStep) {
         <div id="custom-box" hidden>
           <p class="small muted">Build an assessment of your own, with your own name, unit and range.</p>
           <label class="field"><span>Name *</span><input id="c-name" placeholder="e.g. Tiller number" autocomplete="off"></label>
+          <label class="field"><span>Assessment type <span class="muted" style="font-weight:400">(type anything)</span></span><input id="c-type" list="atype-list" placeholder="e.g. Count, Score, Cover, Height" autocomplete="off">
+            <datalist id="atype-list"><option>Count</option><option>Score</option><option>Cover</option><option>Height</option><option>Damage</option><option>Efficacy</option><option>Yield</option><option>Quality</option></datalist></label>
           <div class="grid3">
             <label class="field"><span>Unit</span><input id="c-unit" placeholder="%, cm, 0–9" autocomplete="off"></label>
             <label class="field"><span>Min</span><input id="c-min" inputmode="decimal" autocomplete="off"></label>
@@ -1081,7 +1090,7 @@ function viewAssessForm(t, a, startStep) {
     : mine.concat(others).map(menuOpt).join('');
 
   const subsVal = () => Math.max(1, Math.min(50, parseInt($('b-subs').value, 10) || 1));
-  const blankType = () => ({ id: uid(), name: '', unit: '', min: '', max: '', target: '', kind: '', leaf: '', stage: '', stageMin: '', stageMax: '', sizeH: '', sizeW: '', sizeUnit: 'cm', stageMode: '', stageOther: false, subs: subsVal(), untreatedOnly: false, noPhyto: false, phyto: false });
+  const blankType = () => ({ id: uid(), name: '', unit: '', min: '', max: '', target: '', kind: '', leaf: '', stage: '', stageMin: '', stageMax: '', sizeH: '', sizeW: '', sizeUnit: 'cm', stageMode: '', stageOther: false, atype: '', subs: subsVal(), untreatedOnly: false, noPhyto: false, phyto: false });
   const mkType = (it, extra) => ({ ...blankType(), name: it.n, unit: it.u || '', min: it.min ?? '', max: it.max ?? '', untreatedOnly: !!it.untr || (!!$('b-untr') && $('b-untr').checked), phyto: !!it.phyto, ...extra });
   function addIfNew(nt) {
     if (d.types.some(x => typeLabel(x).toLowerCase() === typeLabel(nt).toLowerCase())) return false;
@@ -1131,7 +1140,7 @@ function viewAssessForm(t, a, startStep) {
       <label class="field"><span>${groups.length ? 'Or type your own' : 'Type a ' + word}</span>
         <span style="display:flex;gap:8px"><input id="b-txt" placeholder="Code or name" autocomplete="off" autocapitalize="characters"><button id="b-add" class="small" type="button">Add</button></span></label>
       <div id="b-picked" class="chips" style="margin-bottom:12px"></div>
-      ${hasLeaf ? `<b class="small">Leaf level(s)</b><div class="chips" id="b-leaves" style="margin:6px 0 4px">${LEAVES.map(l => `<button class="chip ${leaves.includes(l) ? 'on' : ''}" data-l="${l}" type="button">${l}</button>`).join('')}</div>` : ''}
+      ${hasLeaf ? `<b class="small">Leaf level(s) or Ear</b><div class="chips" id="b-leaves" style="margin:6px 0 4px">${LEAVES.map(l => `<button class="chip ${leaves.includes(l) ? 'on' : ''}" data-l="${l}" type="button">${l}</button>`).join('')}</div>` : ''}
     </div>`;
     drawPicked();
     if ($('b-sel')) $('b-sel').onchange = () => { addPick($('b-sel').value); $('b-sel').value = ''; };
@@ -1146,9 +1155,9 @@ function viewAssessForm(t, a, startStep) {
     const name = $('c-name').value.trim();
     if (!name) { toast('Give the custom assessment a name'); $('c-name').focus(); return; }
     const sb = Math.max(1, Math.min(50, parseInt($('c-subs').value, 10) || 1));
-    const ok = addIfNew({ ...blankType(), name, unit: $('c-unit').value.trim(), min: $('c-min').value.trim(), max: $('c-max').value.trim(), subs: sb, untreatedOnly: $('c-untr').checked });
+    const ok = addIfNew({ ...blankType(), name, unit: $('c-unit').value.trim(), min: $('c-min').value.trim(), max: $('c-max').value.trim(), atype: $('c-type').value.trim(), subs: sb, untreatedOnly: $('c-untr').checked });
     if (!ok) { toast('Already added'); return; }
-    ['c-name', 'c-unit', 'c-min', 'c-max'].forEach(id => { $(id).value = ''; }); $('c-untr').checked = false; $('c-subs').value = 1;
+    ['c-name', 'c-type', 'c-unit', 'c-min', 'c-max'].forEach(id => { $(id).value = ''; }); $('c-untr').checked = false; $('c-subs').value = 1;
     drawTypes(); toast('Custom assessment added');
   };
   $('a-menu').onchange = () => { menuKey = $('a-menu').value; sel = new Set(); picked = []; leaves = []; drawMenu(); drawBuilder(); };
@@ -1161,7 +1170,7 @@ function viewAssessForm(t, a, startStep) {
     if (!items.length) { toast('Choose an assessment first'); return; }
     for (const it of items) {
       if (it.tg && !picked.length) { toast(`Choose a ${word} first`); return; }
-      if (it.leaf && !leaves.length) { toast('Choose a leaf level first'); return; }
+      if (it.leaf && !leaves.length) { toast('Choose a leaf level or Ear first'); return; }
     }
     let n = 0;
     items.forEach(it => (it.tg ? picked : ['']).forEach(tg => (it.leaf ? leaves : ['']).forEach(l => { if (addIfNew(mkType(it, { target: tg, kind: tg ? kind : '', needStage: !!tg && !m.noStage, stageMode: (tg && m.stageMode) || '', leaf: l }))) n++; })));
@@ -1176,7 +1185,7 @@ function viewAssessForm(t, a, startStep) {
     const inp = (f, label, ph) => `<label class="field"><span>${label}</span><input data-i="${i}" data-f="${f}" inputmode="decimal" value="${esc(ty[f] || '')}" placeholder="${ph || ''}" autocomplete="off"></label>`;
     return `<div class="acard">
       <div class="ahead"><span class="anum">${i + 1}</span>
-        <div class="atitle"><b>${esc(ty.name || 'New assessment')}</b>${ty.target ? `<span class="pill">${esc(ty.target)}</span>` : ''}${ty.leaf ? `<span class="pill">${esc(ty.leaf)}</span>` : ''}${ty.untreatedOnly ? `<span class="pill warn">Untreated plots only</span>` : ''}${ty.noPhyto ? `<span class="pill">No phyto</span>` : ''}</div>
+        <div class="atitle"><b>${esc(ty.name || 'New assessment')}</b>${ty.target ? `<span class="pill">${esc(ty.target)}</span>` : ''}${ty.leaf ? `<span class="pill">${esc(ty.leaf)}</span>` : ''}${ty.atype ? `<span class="pill">${esc(ty.atype)}</span>` : ''}${ty.untreatedOnly ? `<span class="pill warn">Untreated plots only</span>` : ''}${ty.noPhyto ? `<span class="pill">No phyto</span>` : ''}</div>
         <button class="small danger" data-rm="${i}" title="Remove" aria-label="Remove" type="button">✕</button></div>
       ${needsStage(ty) && ty.stageMode === 'code' ? pestCodeBox(ty, i) : ''}
       ${needsStage(ty) && ty.stageMode !== 'code' ? `<div class="stagebox"><b class="small">${word} growth stage</b>
@@ -1195,6 +1204,7 @@ function viewAssessForm(t, a, startStep) {
           <label><span>Max</span><input data-i="${i}" data-f="max" value="${esc(ty.max)}" inputmode="decimal"></label>
           <label><span>Subsamples</span><input data-i="${i}" data-f="subs" value="${subsOf(ty)}" inputmode="numeric"></label>
         </div>
+        <label class="field" style="margin-top:10px"><span>Assessment type (free type)</span><input data-i="${i}" data-f="atype" list="atype-list" value="${esc(ty.atype || '')}" placeholder="e.g. Count, Score, Cover" autocomplete="off"></label>
       </details>
     </div>`;
   }
@@ -1227,7 +1237,7 @@ function viewAssessForm(t, a, startStep) {
     if (!d.date) { showStep(1); alert('Please enter the date as DD/MM/YYYY.'); $('a-date').focus(); return; }
     if (!d.cropBBCH) { showStep(1); alert('Please enter the crop growth stage (BBCH) – the majority value.'); $('a-bbch').focus(); return; }
     const tr = v => String(v ?? '').trim();
-    d.types = d.types.map(ty => ({ ...ty, name: tr(ty.name), unit: tr(ty.unit), min: tr(ty.min), max: tr(ty.max), stage: tr(ty.stage), stageMin: tr(ty.stageMin), stageMax: tr(ty.stageMax), sizeH: tr(ty.sizeH), sizeW: tr(ty.sizeW), subs: subsOf(ty) })).filter(ty => ty.name);
+    d.types = d.types.map(ty => ({ ...ty, name: tr(ty.name), unit: tr(ty.unit), min: tr(ty.min), max: tr(ty.max), stage: tr(ty.stage), stageMin: tr(ty.stageMin), stageMax: tr(ty.stageMax), sizeH: tr(ty.sizeH), sizeW: tr(ty.sizeW), subs: subsOf(ty), atype: tr(ty.atype) })).filter(ty => ty.name);
     if (startAfter && !d.types.length) { showStep(2); alert('Add at least one assessment first.'); return; }
     const noStage = d.types.filter(ty => needsStage(ty) && !ty.stage);
     if (noStage.length) {
@@ -1287,7 +1297,7 @@ function viewEntry(t, a, idx, focusAt) {
   app.innerHTML = `
   <div class="shell" id="shell">
   <header class="top"><a class="back" href="#/trial/${t.id}">← ${esc(t.trialId)}</a><span class="spacer"></span>
-    <a class="btn small" href="${base}/review">Review</a><div class="brand sm" aria-label="FART – Field Assessment Recording Tool"><b>FART</b><span>Field Assessment Recording Tool</span></div></header>
+    <a class="btn small" href="${base}/review">Review</a><a class="brand sm" href="#/" aria-label="FART – back to the home page"><b>FART</b><span>Field Assessment Recording Tool</span></a></header>
   <main class="entry">
     <div class="bar"><div style="width:${done / order.length * 100}%"></div></div>
     <div class="small muted"><b>${esc(dmy(a.date))}</b> · ${done} of ${order.length} plots complete · page ${idx + 1} of ${order.length}</div>
@@ -1469,7 +1479,7 @@ function viewReview(t, a) {
   const allPlots = plots(t);
 
   app.innerHTML = `
-  <header class="top"><a class="back" href="#/trial/${t.id}">← ${esc(t.trialId)}</a><h1>Review · ${esc(dmy(a.date))}</h1><div class="brand sm" aria-label="FART – Field Assessment Recording Tool"><b>FART</b><span>Field Assessment Recording Tool</span></div></header>
+  <header class="top"><a class="back" href="#/trial/${t.id}">← ${esc(t.trialId)}</a><h1>Review · ${esc(dmy(a.date))}</h1><a class="brand sm" href="#/" aria-label="FART – back to the home page"><b>FART</b><span>Field Assessment Recording Tool</span></a></header>
   <main>
     <p class="small muted">${done} of ${n} plots complete. These are the raw values, grouped by treatment. Edit any value directly; tap a plot number to open that plot.</p>
     <div class="actions">
@@ -1636,10 +1646,10 @@ function excelFile(t, only) {
     ...cols.map(c => applies(t, c.ty, p.trt) ? cell(colVal(c, p.plot)) : null), ...noteCols.map(a => (a.data[p.plot] && a.data[p.plot]._note) || null)]));
 
   // 2. Long format (one row per recorded value, one per subsample — good for pivot tables, R, ARM import)
-  const long = [['Trial', 'Crop', 'Crop code', 'Plot', 'Rep', 'Trt', 'Treatment', 'Untreated', 'Date', 'Assessor', 'Crop BBCH (majority)', 'Crop BBCH min', 'Crop BBCH max', 'Assessment', 'Target', 'Target stage (majority)', 'Target stage min', 'Target stage max', 'Weed height', 'Weed width', 'Weed size unit', 'Leaf level', 'Subsample', 'Unit', 'Value', 'Plot note'].map(B)];
+  const long = [['Trial', 'Crop', 'Crop code', 'Plot', 'Rep', 'Trt', 'Treatment', 'Untreated', 'Date', 'Assessor', 'Crop BBCH (majority)', 'Crop BBCH min', 'Crop BBCH max', 'Assessment', 'Assessment type', 'Target', 'Target stage (majority)', 'Target stage min', 'Target stage max', 'Weed height', 'Weed width', 'Weed size unit', 'Leaf level', 'Subsample', 'Unit', 'Value', 'Plot note'].map(B)];
   as.forEach(a => ps.forEach(p => expandCols([a]).forEach(c => {
     const ty = c.ty; if (!applies(t, ty, p.trt)) return;
-    long.push([t.trialId, cp.name || null, cp.code || null, p.plot, p.rep, p.trt, trtName(t, p.trt) || null, p.trt === t.untreated ? 'Yes' : null, dmy(a.date), a.assessor || null, a.cropBBCH || null, a.cropBBCHMin || null, a.cropBBCHMax || null, ty.name, ty.target || null, ty.stage || null, ty.stageMin || null, ty.stageMax || null, ty.sizeH || null, ty.sizeW || null, (ty.sizeH || ty.sizeW) ? (ty.sizeUnit || 'cm') : null, ty.leaf || null, c.k === null ? null : c.k + 1, ty.unit || null, cell(colVal(c, p.plot)), (a.data[p.plot] && a.data[p.plot]._note) || null]);
+    long.push([t.trialId, cp.name || null, cp.code || null, p.plot, p.rep, p.trt, trtName(t, p.trt) || null, p.trt === t.untreated ? 'Yes' : null, dmy(a.date), a.assessor || null, a.cropBBCH || null, a.cropBBCHMin || null, a.cropBBCHMax || null, ty.name, ty.atype || null, ty.target || null, ty.stage || null, ty.stageMin || null, ty.stageMax || null, ty.sizeH || null, ty.sizeW || null, (ty.sizeH || ty.sizeW) ? (ty.sizeUnit || 'cm') : null, ty.leaf || null, c.k === null ? null : c.k + 1, ty.unit || null, cell(colVal(c, p.plot)), (a.data[p.plot] && a.data[p.plot]._note) || null]);
   })));
 
   // 3. Field layout
