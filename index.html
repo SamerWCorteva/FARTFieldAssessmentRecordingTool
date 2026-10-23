@@ -276,7 +276,7 @@ details summary { cursor:pointer; font-weight:600; min-height:32px; }
 </div>
 <script>
 'use strict';
-const APP_VERSION = 34;
+const APP_VERSION = 35;
 // keep APP_VERSION in step with VERSION in sw.js
 const cap = s => { s = String(s ?? ''); return s.charAt(0).toUpperCase() + s.slice(1); }; // first letter capital, used for titles and headers
 /* ---------- storage ---------- */
@@ -1253,15 +1253,8 @@ function viewAssessForm(t, a, startStep) {
   const d = editing ? JSON.parse(JSON.stringify(a)) : {
     id: uid(), date: today(), assessor: db.settings.assessor || '', cropBBCH: '', cropBBCHMin: '', cropBBCHMax: '', notes: '', types: [], data: {}, created: Date.now()
   };
-  if (!editing) {
-    // start from the assessments used in this trial's most recent date (growth stages are re-entered)
-    const last = [...t.assessments].sort((x, y) => y.created - x.created)[0];
-    d.types = last ? last.types.map(ty => ({ ...ty, id: uid(), stage: '', stageMin: '', stageMax: '', sizeH: '', sizeW: '' })) : [];
-  }
-  const seen = new Map();
-  db.trials.forEach(tr => tr.assessments.forEach(as => as.types.forEach(ty => {
-    const k = typeLabel(ty).toLowerCase(); if (ty.name && !seen.has(k)) seen.set(k, ty);
-  })));
+  // a new date starts blank – earlier dates in this trial can be looked at (and copied from) under "Previous assessments"
+  const prevAs = t.assessments.filter(x => x.id !== d.id && x.types.length).sort((x, y) => (y.date || '').localeCompare(x.date || '') || y.created - x.created);
   const back = `#/trial/${t.id}`;
   let step = startStep || 1;
 
@@ -1327,7 +1320,10 @@ function viewAssessForm(t, a, startStep) {
         <h2>Added Assessments</h2>
         <div id="sum" class="sumline"></div>
         <div id="types"></div>
-        ${seen.size ? `<details><summary>Used before — tap to add</summary><div class="chips" style="margin-top:8px">${[...seen.values()].map((ty, i) => `<button class="chip" data-s="${i}" type="button">${esc(typeLabel(ty))}</button>`).join('')}</div></details>` : ''}
+        ${prevAs.length ? `<details style="margin-top:6px"><summary>Previous assessments in this trial (${prevAs.length} date${prevAs.length === 1 ? '' : 's'})</summary>
+          <p class="small muted" style="margin:6px 0 0">Tap one to add it to this date, or add everything from a date.</p>
+          ${prevAs.map((pa, pi) => `<div style="margin-top:10px"><div class="arow"><b>${esc(dmy(pa.date))}</b><button class="small" data-pall="${pi}" type="button">Add all</button></div>
+            <div class="chips" style="margin-top:6px">${pa.types.map((ty, ti) => `<button class="chip" data-pt="${pi}.${ti}" type="button">${esc(typeLabel(ty))}</button>`).join('')}</div></div>`).join('')}</details>` : ''}
       </section>
     </div>
 
@@ -1364,7 +1360,6 @@ function viewAssessForm(t, a, startStep) {
   $('w-next').onclick = () => goStep(2);
   $('w-back').onclick = () => goStep(1);
 
-  const sugg = [...seen.values()];
   const forThis = MENU_FOR[t.type] || [];
   let menuKey = forThis[0] || 'common';
   const getMenu = () => MENUS.find(m => m.key === menuKey);
@@ -1510,11 +1505,9 @@ function viewAssessForm(t, a, startStep) {
     });
     $('types').querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { if (removeType(+b.dataset.rm)) drawTypes(); });
   }
-  app.querySelectorAll('[data-s]').forEach(b => b.onclick = () => {
-    const s = sugg[b.dataset.s];
-    addIfNew({ ...blankType(), name: s.name, unit: s.unit || '', min: s.min ?? '', max: s.max ?? '', target: s.target || '', kind: s.kind || '', needStage: s.needStage, phyto: !!s.phyto, leaf: s.leaf || '', untreatedOnly: !!s.untreatedOnly });
-    drawTypes();
-  });
+  const addFrom = s => addIfNew({ ...blankType(), name: s.name, unit: s.unit || '', min: s.min ?? '', max: s.max ?? '', target: s.target || '', kind: s.kind || '', needStage: s.needStage, stageMode: s.stageMode || '', phyto: !!s.phyto, leaf: s.leaf || '', atype: s.atype || '', untreatedOnly: !!s.untreatedOnly, subs: subsOf(s) }); // growth stages are entered again for this date
+  app.querySelectorAll('[data-pt]').forEach(b => b.onclick = () => { const [pi, ti] = b.dataset.pt.split('.').map(Number); toast(addFrom(prevAs[pi].types[ti]) ? 'Added' : 'Already added'); drawTypes(); });
+  app.querySelectorAll('[data-pall]').forEach(b => b.onclick = () => { let n = 0; prevAs[+b.dataset.pall].types.forEach(ty => { if (addFrom(ty)) n++; }); drawTypes(); toast(n ? `Added ${n} assessment${n > 1 ? 's' : ''}` : 'Already added'); });
 
   function commit(startAfter) {
     d.date = parseDmy($('a-date').value); d.assessor = $('a-who').value.trim().toUpperCase(); d.notes = $('a-notes').value.trim();
