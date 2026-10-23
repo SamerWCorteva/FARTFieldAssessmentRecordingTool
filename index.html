@@ -35,6 +35,18 @@
 .trial-card .mv select { width:auto; min-height:36px; flex:1; }
 a.brand, .brand-link { color:inherit; text-decoration:none; }
 .brand-link { display:block; }
+.crow { display:grid; grid-template-columns:1.25fr .8fr .8fr 58px 34px; gap:6px; align-items:center; margin-bottom:6px; }
+.crow.chead { font-size:.75rem; font-weight:700; color:var(--muted); margin-bottom:2px; }
+.crow input[type=text], .crow input:not([type]) { min-height:42px; padding:.3rem .4rem; text-align:center; }
+.crow input.err { border-color:var(--bad); background:var(--bad-soft); }
+.crow input:disabled { background:var(--line); }
+.crow .chk { justify-content:center; }
+.map .pc.buf { background:repeating-linear-gradient(135deg, var(--bg), var(--bg) 5px, var(--line) 5px, var(--line) 6px); }
+.map .pc.buf span { font-style:italic; }
+.seg { display:flex; gap:6px; margin:4px 0 12px; }
+.seg button { flex:1; min-height:42px; }
+.seg button.on { background:var(--accent-soft); color:var(--accent); border-color:var(--accent); }
+.rand input.buf { background:repeating-linear-gradient(135deg, var(--bg), var(--bg) 5px, var(--line) 5px, var(--line) 6px); }
 .brand.sm { flex:none; margin-left:auto; text-align:right; }
 .brand.sm b { font-size:1.05rem; letter-spacing:.06em; }
 .brand.sm span { font-size:.5rem; max-width:5.3rem; margin-left:auto; line-height:1.1; letter-spacing:.02em; }
@@ -252,7 +264,8 @@ details summary { cursor:pointer; font-weight:600; min-height:32px; }
 </div>
 <script>
 'use strict';
-const APP_VERSION = 28; // keep in step with VERSION in sw.js
+const APP_VERSION = 30;
+const APP_BUILT = '23/10/2026'; // date this version was made // keep in step with VERSION in sw.js
 /* ---------- storage ---------- */
 const KEY = 'fieldAssessments.v1';
 const app = document.getElementById('app');
@@ -266,6 +279,12 @@ function migrateDb(d) { // keeps older data and backups working
     if (t.crop) t.crop = t.crop.replace('(BRSNN)', '(BRSNW)');
     t.trialId = String(t.trialId || '').toUpperCase();
     (t.assessments || []).forEach(a => { if (a.assessor) a.assessor = String(a.assessor).toUpperCase(); });
+    if (t.randType === 'custom' && Array.isArray(t.plotList) && t.plotList.some(p => p.row == null)) {
+      const reps = [...new Set(t.plotList.map(p => p.rep))].sort((x, y) => x - y), seenN = {};
+      t.plotList.forEach(p => { const r = reps.indexOf(p.rep) + 1; seenN[r] = (seenN[r] || 0) + 1; p.row = r; p.col = seenN[r]; });
+      t.plotList.sort((x, y) => x.row - y.row || x.col - y.col);
+      t.grid = { across: Math.max(...Object.values(seenN)), up: reps.length };
+    }
     (t.assessments || []).forEach(a => (a.types || []).forEach(ty => { if (ty.sizeL !== undefined) { if (ty.sizeH === undefined) ty.sizeH = ty.sizeL; delete ty.sizeL; } }));
   });
   if (d.settings && d.settings.assessor) d.settings.assessor = String(d.settings.assessor).toUpperCase();
@@ -285,7 +304,9 @@ function doBackup() {
   toast('Backup saved');
 }
 const secOpts = sel => `<option value="">None (Other trials)</option>${db.sections.map(sc => `<option value="${sc.id}" ${sel === sc.id ? 'selected' : ''}>${esc(sc.name)}</option>`).join('')}`;
+const fmtDT = ts => { const x = new Date(ts), z = n => String(n).padStart(2, '0'); return `${z(x.getDate())}/${z(x.getMonth() + 1)}/${x.getFullYear()} ${z(x.getHours())}:${z(x.getMinutes())}`; };
 function save() {
+  db.settings.lastSaved = Date.now(); // shown on the home screen as the last update
   try { localStorage.setItem(KEY, JSON.stringify(db)); return true; }
   catch (e) { toast('Could not save on this device. Export a backup now.'); return false; }
 }
@@ -413,16 +434,28 @@ function plotNo(t, r, i) { // r, i are 0-based
   const base = t.trts > 99 ? 1000 : 100;
   return (r + 1) * base + i + 1;
 }
-function plots(t) {
+const isCustom = t => t.randType === 'custom' && Array.isArray(t.plotList); // custom randomization: plots typed in by hand
+function plots(t) { // plots that record data (buffers are not included)
+  if (isCustom(t)) return t.plotList.filter(p => p.trt > 0).map((p, i) => ({ plot: p.plot, rep: p.rep, pos: i + 1, trt: p.trt, row: p.row }));
   const out = [];
   t.layout.forEach((row, r) => row.forEach((trt, i) => out.push({ plot: plotNo(t, r, i), rep: r + 1, pos: i + 1, trt: Number(trt) })));
   return out;
 }
-function walkOrder(t, a) { // a.serpentine (set while assessing) wins over the trial's default
+const bufferPlots = t => isCustom(t) ? t.plotList.filter(p => !(p.trt > 0)).map(p => ({ plot: p.plot, rep: p.rep, trt: 0 })) : [];
+const plotCount = t => plots(t).length;
+function layoutRows(t) { // for drawing the field: one row per physical row; buffers have trt 0
+  if (isCustom(t)) {
+    const rws = [...new Set(t.plotList.map(p => p.row))].sort((x, y) => x - y);
+    return rws.map(r => ({ label: `Row ${r}`, cells: t.plotList.filter(p => p.row === r).sort((x, y) => x.col - y.col).map(p => ({ plot: p.plot, trt: p.trt > 0 ? p.trt : 0, rep: p.rep })) }));
+  }
+  return t.layout.map((row, r) => ({ label: `Rep ${r + 1}`, cells: row.map((k, i) => ({ plot: plotNo(t, r, i), trt: Number(k) })) }));
+}
+function walkOrder(t, a) { // a.serpentine (set while assessing) wins over the trial's default; custom lists keep the order they were typed in
   const all = plots(t);
   if (!(a && a.serpentine !== undefined ? a.serpentine : t.serpentine)) return all;
   const out = [];
-  for (let r = 1; r <= t.reps; r++) { const row = all.filter(p => p.rep === r); if (r % 2 === 0) row.reverse(); out.push(...row); }
+  const grp = p => p.row != null ? p.row : p.rep; // custom grids reverse every other physical row
+  [...new Set(all.map(grp))].sort((x, y) => x - y).forEach((r, k) => { const row = all.filter(p => grp(p) === r); if (k % 2 === 1) row.reverse(); out.push(...row); });
   return out;
 }
 const trtName = (t, k) => (t.trtNames && t.trtNames[k - 1]) || '';
@@ -447,8 +480,9 @@ const val = (a, plot, typeId) => {
 };
 const plotTrtCache = new WeakMap();
 function trtOfPlot(t, plot) {
-  let m = plotTrtCache.get(t.layout);
-  if (!m) { m = new Map(plots(t).map(p => [p.plot, p.trt])); plotTrtCache.set(t.layout, m); }
+  const key = isCustom(t) ? t.plotList : t.layout;
+  let m = plotTrtCache.get(key);
+  if (!m) { m = new Map(plots(t).map(p => [p.plot, p.trt])); plotTrtCache.set(key, m); }
   return m.get(plot);
 }
 const applies = (t, ty, trt) => !ty.untreatedOnly || (!!t.untreated && trt === t.untreated);
@@ -569,14 +603,14 @@ function viewHome() {
   <header class="top"><h1 class="brand"><a class="brand-link" href="#/" aria-label="FART – home"><b>FART</b><span>Field Assessment Recording Tool</span></a></h1><a class="btn primary small" href="#/trial/new">+ Add trial</a></header>
   <main>
     ${db.trials.length ? (() => { const lb = db.settings.lastBackup, days = lb ? Math.floor((Date.now() - lb) / 864e5) : null, stale = !lb || days >= 7;
-      return `<div class="card ${stale ? 'warnbox' : ''}"><div class="arow"><div><b>Backup</b><div class="small">Last backup: ${lb ? (days === 0 ? 'today' : days === 1 ? '1 day ago' : days + ' days ago') : 'never'}</div></div>
+      return `<div class="card ${stale ? 'warnbox' : ''}"><div class="arow"><div><b>Backup</b><div class="small">Last update: ${db.settings.lastSaved ? fmtDT(db.settings.lastSaved) : '–'}</div><div class="small">Last backup: ${lb ? (days === 0 ? 'today' : days === 1 ? '1 day ago' : days + ' days ago') : 'never'}</div></div>
         <button id="bk-now" class="small ${stale ? 'primary' : ''}">Back up now</button></div></div>`; })() : ''}
     ${trials.length ? (() => {
       const card = t => `<div class="card trial-card" data-s="${esc([t.trialId, t.desc, t.type, t.crop, (db.sections.find(x => x.id === t.section) || {}).name].filter(Boolean).join(' ').toLowerCase())}"><a class="tc-link" href="#/trial/${t.id}">
         <h2>${esc(t.trialId)}</h2>
         ${t.desc ? `<p class="muted">${esc(t.desc)}</p>` : ''}
         ${(t.type || t.crop) ? `<div class="pills">${t.type ? `<span class="pill">${esc(t.type)}</span>` : ''}${t.crop ? `<span class="pill">${esc(t.crop)}</span>` : ''}</div>` : ''}
-        <div class="small muted" style="margin-top:.4rem">${t.reps} reps × ${t.trts} treatments · ${t.reps * t.trts} plots ·
+        <div class="small muted" style="margin-top:.4rem">${t.reps} reps × ${t.trts} treatments · ${plotCount(t)} plots · updated ${fmtDT(t.updated || t.created || Date.now())} ·
           <span class="pill">${t.assessments.length} assessment${t.assessments.length === 1 ? '' : 's'}</span></div>
       </a></div>`;
       const secs = db.sections, inSec = id => trials.filter(t => t.section === id), loose = trials.filter(t => !secs.some(sc => sc.id === t.section));
@@ -655,6 +689,8 @@ function viewTrialForm(trial) {
     trtNames: [], layout: null, assessments: [], created: Date.now()
   };
   if (!d.layout) d.layout = blankLayout(d.reps, d.trts);
+  d.randType = d.randType || 'rcb'; // 'rcb' = regular randomized complete block (default), 'custom' = plots typed in by hand
+  d.plotList = d.plotList || [];
 
   app.innerHTML = `
   <header class="top"><a class="back" href="${editing ? '#/trial/' + d.id : '#/'}">← Back</a><h1>${editing ? 'Edit trial' : 'Add trial'}</h1><a class="brand sm" href="#/" aria-label="FART – back to the home page"><b>FART</b><span>Field Assessment Recording Tool</span></a></header>
@@ -679,7 +715,12 @@ function viewTrialForm(trial) {
           <input id="f-crop-other" value="${esc(d.crop && !isKnownCrop(d.crop) ? d.crop : '')}" placeholder="Crop name (CODE)" autocomplete="off"></label>
         <label class="field"><span>Number of reps *</span><input id="f-reps" type="number" inputmode="numeric" min="1" max="50" value="${d.reps}" ${locked ? 'disabled' : ''}></label>
         <label class="field"><span>Number of treatments *</span><input id="f-trts" type="number" inputmode="numeric" min="1" max="200" value="${d.trts}" ${locked ? 'disabled' : ''}></label>
-        <label class="field"><span>Plot numbering</span>
+        <label class="field"><span>Randomization</span>
+          <select id="f-rtype" ${locked ? 'disabled' : ''}>
+            <option value="rcb" ${d.randType !== 'custom' ? 'selected' : ''}>Regular RCB</option>
+            <option value="custom" ${d.randType === 'custom' ? 'selected' : ''}>Custom Randomization</option>
+          </select></label>
+        <label class="field" id="num-wrap"><span>Plot numbering <span class="muted" style="font-weight:400">(also used by Auto-number in custom)</span></span>
           <select id="f-num" ${locked ? 'disabled' : ''}>
             <option value="rep" ${d.numbering === 'rep' ? 'selected' : ''}>By rep: 101, 102… 201, 202…</option>
             <option value="seq" ${d.numbering === 'seq' ? 'selected' : ''}>Sequential: 1, 2, 3…</option>
@@ -687,7 +728,7 @@ function viewTrialForm(trial) {
         <label class="field"><span>Walking order</span>
           <label class="chk" style="min-height:44px"><input type="checkbox" id="f-serp" ${d.serpentine ? 'checked' : ''}> Serpentine (reverse every other rep) – can also be switched while assessing</label></label>
       </div>
-      ${locked ? `<p class="small muted">Reps, treatments and plot numbering are locked because this trial already has assessment data.</p>` : ''}
+      ${locked ? `<p class="small muted">Reps, treatments, randomization type and plot numbering are locked because this trial already has assessment data.</p>` : ''}
     </section>
 
     <section class="card" data-step="2">
@@ -697,7 +738,8 @@ function viewTrialForm(trial) {
     </section>
 
     <section class="card" data-step="3">
-      <h2>Randomization</h2>
+      <h2 id="rand-title">Randomization</h2>
+      <div id="rcb-block">
       <p class="small muted">Enter the treatment number for each plot from your protocol. The plot number is shown above each box. It jumps to the next box as you type, and ◀ ▲ ▼ ▶ move around. Each rep must contain every treatment once.</p>
       <div class="actions"><button id="r-clear" class="small">Clear all</button></div>
       <div id="rand"></div>
@@ -707,6 +749,23 @@ function viewTrialForm(trial) {
         <textarea id="paste" placeholder="3 1 4 2 6 5&#10;2 5 1 6 3 4&#10;…"></textarea>
         <div class="actions"><button id="paste-go" class="small">Apply pasted randomization</button></div>
       </details>
+      </div>
+      <div id="cust-block" hidden>
+        <p class="small muted">Say how many plots there are across and up, then fill in the grid by hand. Use the tabs to enter each plot's treatment, rep and plot number. Type <b>B</b> as the treatment for an empty buffer plot – no values are recorded on it. Row 1 is at the bottom.</p>
+        <div class="grid2">
+          <label class="field"><span>Plots across</span><input id="g-across" type="number" inputmode="numeric" min="1" max="60"></label>
+          <label class="field"><span>Plots up</span><input id="g-up" type="number" inputmode="numeric" min="1" max="60"></label>
+        </div>
+        <div class="seg" id="g-tabs"><button type="button" data-l="trt">Treatment</button><button type="button" data-l="rep">Rep</button><button type="button" data-l="plot">Plot no.</button></div>
+        <div id="g-grid"></div>
+        <p id="c-status" class="small"></p>
+        <div class="actions"><button id="g-autoplot" class="small" type="button">Auto-number plots</button><button id="g-autorep" class="small" type="button">Rep = row number</button><button id="g-clear" class="small danger" type="button">Clear tab</button></div>
+        <details style="margin-top:8px"><summary>Faster: paste the current tab</summary>
+          <p class="small muted">One line per row, row 1 (the bottom row) first. Spaces, commas and tabs all work. On the Treatment tab use B for a buffer.</p>
+          <textarea id="c-paste" placeholder="3 1 B 2&#10;2 B 1 3&#10;…"></textarea>
+          <div class="actions"><button id="c-paste-go" class="small" type="button">Apply to this tab</button></div>
+        </details>
+      </div>
     </section>
 
     <div class="actions">
@@ -731,6 +790,93 @@ function viewTrialForm(trial) {
   }
 
   const $ = id => document.getElementById(id);
+  const custom = () => d.randType === 'custom';
+
+  /* ---- custom randomization: a grid of plots across x up ---- */
+  let layer = 'trt'; // which value the grid is showing: trt / rep / plot
+  const isInt = v => v !== '' && v != null && Number.isInteger(Number(v));
+  const blankCell = () => ({ plot: '', rep: '', trt: '', buf: false });
+  const autoPlot = (row, col, across) => d.numbering === 'seq' ? (row - 1) * across + col : row * (across > 99 ? 1000 : 100) + col; // row 1 is the bottom row
+  function buildGrid(across, up, old) { // keeps what was typed, gives new cells a plot number and a rep (= row)
+    const cells = [];
+    for (let r = 0; r < up; r++) { cells.push([]); for (let c = 0; c < across; c++) { const o = old && old[r] && old[r][c]; cells[r].push(o ? { ...o } : { plot: autoPlot(r + 1, c + 1, across), rep: r + 1, trt: '', buf: false }); } }
+    return { across, up, cells };
+  }
+  function gridFromList() {
+    const L = d.plotList || [];
+    if (L.length && L.every(p => p.row != null)) {
+      const across = (d.grid && d.grid.across) || Math.max(...L.map(p => p.col)), up = (d.grid && d.grid.up) || Math.max(...L.map(p => p.row));
+      const g = buildGrid(across, up);
+      g.cells.forEach(row => row.forEach(c => { c.plot = ''; c.rep = ''; }));
+      L.forEach(p => { if (g.cells[p.row - 1] && g.cells[p.row - 1][p.col - 1]) g.cells[p.row - 1][p.col - 1] = { plot: p.plot, rep: p.rep > 0 ? p.rep : '', trt: p.trt > 0 ? p.trt : '', buf: !(p.trt > 0) }; });
+      return g;
+    }
+    return buildGrid(Math.min(60, d.trts), Math.min(60, d.reps));
+  }
+  const cellErr = (cell, r, c) => ({
+    trt: !cell.buf && (!isInt(cell.trt) || Number(cell.trt) < 1 || Number(cell.trt) > d.trts),
+    rep: !cell.buf && (!isInt(cell.rep) || Number(cell.rep) < 1 || Number(cell.rep) > d.reps),
+    plot: !isInt(cell.plot) || d.grid.cells.some((row, rr) => row.some((o, cc) => (rr !== r || cc !== c) && isInt(o.plot) && Number(o.plot) === Number(cell.plot))),
+  });
+  function gridStatus() {
+    const errCount = { trt: 0, rep: 0, plot: 0 }; let bufs = 0;
+    d.grid.cells.forEach((row, r) => row.forEach((cell, c) => { if (cell.buf) bufs++; const e = cellErr(cell, r, c); ['trt', 'rep', 'plot'].forEach(f => { if (e[f]) errCount[f]++; }); }));
+    const bad = errCount.trt + errCount.rep + errCount.plot > 0, warn = [];
+    if (!bad) {
+      const real = []; d.grid.cells.forEach(row => row.forEach(cell => { if (!cell.buf) real.push(cell); }));
+      range(d.reps).forEach(rp => range(d.trts).forEach(k => {
+        const n = real.filter(x => Number(x.rep) === rp && Number(x.trt) === k).length;
+        if (n === 0) warn.push(`Trt ${k} is not in rep ${rp}`); else if (n > 1) warn.push(`Trt ${k} appears ${n} times in rep ${rp}`);
+      }));
+    }
+    return { errCount, bad, warn, bufs, total: d.grid.across * d.grid.up };
+  }
+  function validateGrid() {
+    const st = gridStatus();
+    $('g-grid').querySelectorAll('input[data-r]').forEach(inp => { const r = +inp.dataset.r, c = +inp.dataset.c; inp.classList.toggle('err', cellErr(d.grid.cells[r][c], r, c)[layer]); });
+    $('g-tabs').querySelectorAll('button').forEach(b => { const n = st.errCount[b.dataset.l]; b.classList.toggle('on', b.dataset.l === layer); b.textContent = { trt: 'Treatment', rep: 'Rep', plot: 'Plot no.' }[b.dataset.l] + (n ? ` ⚠${n}` : ''); });
+    $('c-status').innerHTML = `<b>${st.total - st.bufs}</b> plot${st.total - st.bufs === 1 ? '' : 's'} · <b>${st.bufs}</b> buffer`
+      + (st.bad ? ` · <span class="rep-bad">some boxes need filling in (red / ⚠ on the tabs)</span>` : st.warn.length ? `<br><span class="muted">Note: ${esc(st.warn.slice(0, 6).join('; '))}${st.warn.length > 6 ? ` … and ${st.warn.length - 6} more` : ''}</span>` : ' · <span class="rep-ok">✓</span>');
+  }
+  function drawGrid() {
+    const g = d.grid; $('g-across').value = g.across; $('g-up').value = g.up;
+    $('g-grid').innerHTML = `<div class="scroll"><table class="rand"><tbody>${range(g.up).reverse().map(rn => {
+      const r = rn - 1;
+      return `<tr><th class="l">Row ${rn}</th>${g.cells[r].map((cell, c) => {
+        const small = layer === 'plot' ? (cell.buf ? 'Buffer' : (cell.trt ? 'T' + cell.trt : '')) : (cell.plot === '' ? '' : cell.plot);
+        const v = layer === 'trt' ? (cell.buf ? 'B' : cell.trt) : layer === 'rep' ? cell.rep : cell.plot;
+        return `<td><div class="cell"><small>${esc(small)}</small><input data-r="${r}" data-c="${c}" tabindex="${2 + r * g.across + c}" value="${esc(v)}" inputmode="${layer === 'trt' ? 'text' : 'numeric'}" enterkeyhint="next" autocomplete="off" autocapitalize="characters" class="${cell.buf ? 'buf' : ''}"></div></td>`;
+      }).join('')}</tr>`;
+    }).join('')}</tbody></table></div>`;
+    const boxes = [...$('g-grid').querySelectorAll('input[data-r]')];
+    const move = dir => {
+      const cur = document.activeElement; if (!cur || cur.dataset.r === undefined) return;
+      let r = +cur.dataset.r, c = +cur.dataset.c;
+      if (dir === 'right') { c++; if (c >= g.across) { c = 0; r++; } } else if (dir === 'left') { c--; if (c < 0) { c = g.across - 1; r--; } } else if (dir === 'up') r++; else r--;
+      const n = $('g-grid').querySelector(`input[data-r="${r}"][data-c="${c}"]`); if (n) n.focus();
+    };
+    boxes.forEach(inp => {
+      const r = +inp.dataset.r, c = +inp.dataset.c;
+      inp.onfocus = () => setTimeout(() => inp.select(), 0);
+      inp.oninput = () => {
+        const cell = d.grid.cells[r][c], v = inp.value.trim();
+        if (layer === 'trt') { if (/^(b|buf|buffer)$/i.test(v)) { cell.buf = true; cell.trt = ''; } else { cell.buf = false; cell.trt = v; } inp.classList.toggle('buf', cell.buf); }
+        else cell[layer] = v;
+        validateGrid();
+        const n = Number(v), max = layer === 'trt' ? d.trts : layer === 'rep' ? d.reps : 0;
+        if ((layer !== 'plot') && ((layer === 'trt' && cell.buf) || (Number.isInteger(n) && n >= 1 && n <= max && n * 10 > max))) move('right');
+      };
+      inp.onkeydown = e => { if (kb.key(e)) return; if (e.key === 'Enter') { e.preventDefault(); move('right'); } };
+    });
+    kb.use({ dirs: ['left', 'right', 'up', 'down'], go: move }, boxes);
+    validateGrid();
+  }
+  function applyMode() {
+    const c = custom();
+    $('rcb-block').hidden = c; $('cust-block').hidden = !c;
+    $('rand-title').textContent = c ? 'Randomization – custom' : 'Randomization – regular RCB';
+    if (c) { if (!d.grid || !d.grid.cells) d.grid = gridFromList(); drawGrid(); }
+  }
 
   function drawNames() {
     if (d.untreated > d.trts) d.untreated = 0;
@@ -805,6 +951,7 @@ function viewTrialForm(trial) {
     const trts = clamp(parseInt($('f-trts').value, 10) || 1, 1, 200);
     if (reps === d.reps && trts === d.trts) return;
     d.reps = reps; d.trts = trts;
+    if (custom()) { drawNames(); if (d.grid && d.grid.cells) validateGrid(); return; } // the custom grid is kept; anything now out of range turns red
     d.layout = blankLayout(reps, trts);
     drawNames(); drawRand();
     toast('Layout cleared – fill in the randomization');
@@ -813,6 +960,35 @@ function viewTrialForm(trial) {
   $('f-id').oninput = e => { const el = e.target, pos = el.selectionStart; el.value = el.value.toUpperCase(); try { el.setSelectionRange(pos, pos); } catch (err) {} };
   $('f-reps').onchange = resize; $('f-trts').onchange = resize;
   $('f-num').onchange = () => { d.numbering = $('f-num').value; drawRand(); };
+  $('f-rtype').onchange = () => { d.randType = $('f-rtype').value; applyMode(); };
+  $('g-tabs').querySelectorAll('button').forEach(b => b.onclick = () => { layer = b.dataset.l; drawGrid(); });
+  const resizeGrid = () => {
+    const across = clamp(parseInt($('g-across').value, 10) || 1, 1, 60), up = clamp(parseInt($('g-up').value, 10) || 1, 1, 60);
+    if (across === d.grid.across && up === d.grid.up) return;
+    const lost = d.grid.cells.some((row, r) => row.some((cell, c) => (r >= up || c >= across) && (cell.trt !== '' || cell.buf)));
+    if (lost && !confirm('Making the grid smaller removes some plots you have already entered. Continue?')) { $('g-across').value = d.grid.across; $('g-up').value = d.grid.up; return; }
+    d.grid = buildGrid(across, up, d.grid.cells); drawGrid();
+  };
+  $('g-across').onchange = resizeGrid; $('g-up').onchange = resizeGrid;
+  $('g-autoplot').onclick = () => { d.grid.cells.forEach((row, r) => row.forEach((cell, c) => { cell.plot = autoPlot(r + 1, c + 1, d.grid.across); })); layer = 'plot'; drawGrid(); toast('Plot numbers filled in'); };
+  $('g-autorep').onclick = () => { d.grid.cells.forEach((row, r) => row.forEach(cell => { cell.rep = r + 1; })); layer = 'rep'; drawGrid(); toast('Rep set to the row number'); };
+  $('g-clear').onclick = () => {
+    if (!confirm(`Clear everything on the ${{ trt: 'Treatment', rep: 'Rep', plot: 'Plot no.' }[layer]} tab?`)) return;
+    d.grid.cells.forEach(row => row.forEach(cell => { if (layer === 'trt') { cell.trt = ''; cell.buf = false; } else cell[layer] = ''; })); drawGrid();
+  };
+  $('c-paste-go').onclick = () => {
+    const lines = $('c-paste').value.split(/\r?\n/).map(l => l.trim()).filter(Boolean).map(l => l.split(/[\s,;]+/).filter(Boolean));
+    if (!lines.length) { alert('Paste one line per row first (row 1 at the bottom comes first).'); return; }
+    const bad = [];
+    lines.forEach((tokens, r) => tokens.forEach((tk, c) => {
+      if (r >= d.grid.up || c >= d.grid.across) { bad.push(`row ${r + 1}, box ${c + 1}`); return; }
+      const cell = d.grid.cells[r][c];
+      if (layer === 'trt') { if (/^(b|buf|buffer)$/i.test(tk)) { cell.buf = true; cell.trt = ''; } else if (isInt(tk)) { cell.buf = false; cell.trt = Number(tk); } else bad.push(tk); }
+      else if (isInt(tk)) cell[layer] = Number(tk); else bad.push(tk);
+    }));
+    drawGrid();
+    if (bad.length) alert(`Some entries did not fit or were not numbers: ${bad.slice(0, 6).join(', ')}${bad.length > 6 ? '…' : ''}`); else toast('Pasted');
+  };
   $('f-serp').onchange = () => { d.serpentine = $('f-serp').checked; };
   $('r-clear').onclick = () => { if (!confirm('Clear every plot in the randomization?')) return; d.layout = blankLayout(d.reps, d.trts); drawRand(); $('rand').querySelector('input:not(.sentinel)').focus(); };
   $('paste-go').onclick = () => {
@@ -842,11 +1018,24 @@ function viewTrialForm(trial) {
     d.crop = $('f-crop').value === '__other' ? $('f-crop-other').value.trim() : $('f-crop').value;
     if (!d.trialId) { alert('Please enter a Trial ID.'); $('f-id').focus(); return; }
     if (db.trials.some(t => t.id !== d.id && t.trialId.toLowerCase() === d.trialId.toLowerCase()) && !confirm(`A trial called "${d.trialId}" already exists. Save anyway?`)) return;
-    const sts = d.layout.map(row => repStatus(row, d.trts));
-    if (sts.some(s => s.blanks || s.bad)) { alert('Every plot needs a treatment number between 1 and ' + d.trts + '.'); return; }
-    if (sts.some(s => !s.ok) && !confirm('Some reps do not contain each treatment exactly once. Save anyway?')) return;
-    if (locked && JSON.stringify(trial.layout) !== JSON.stringify(d.layout) && !confirm('This trial has data. Changing the randomization will re-assign existing plot data to the new treatments. Continue?')) return;
-    d.layout = d.layout.map(row => row.map(Number));
+    if (custom()) {
+      const st = gridStatus();
+      if (st.total - st.bufs < 1) { showStep(3); alert('Fill in the custom randomization first – at least one plot that is not a buffer.'); return; }
+      if (st.bad) { showStep(3); validateGrid(); alert(`Some boxes still need filling in (Treatment: ${st.errCount.trt}, Rep: ${st.errCount.rep}, Plot no.: ${st.errCount.plot}). Every plot needs a treatment from 1 to ${d.trts} (or B for a buffer), a rep from 1 to ${d.reps} and a different plot number.`); return; }
+      if (st.warn.length && !confirm(`${st.warn.slice(0, 5).join('\n')}${st.warn.length > 5 ? '\n…' : ''}\n\nSave anyway? (If a treatment appears twice in a rep, the Review table only lists the first of those plots.)`)) return;
+      const before = trial && trial.plotList ? JSON.stringify(trial.plotList) : '';
+      const list = [];
+      d.grid.cells.forEach((row, r) => row.forEach((cell, c) => list.push({ plot: Number(cell.plot), rep: cell.buf ? (Number(cell.rep) || 0) : Number(cell.rep), trt: cell.buf ? 0 : Number(cell.trt), row: r + 1, col: c + 1 })));
+      d.plotList = list; d.grid = { across: d.grid.across, up: d.grid.up };
+      if (locked && before !== JSON.stringify(d.plotList) && !confirm('This trial has data. Changing the plots will re-assign existing plot data. Continue?')) return;
+    } else {
+      const sts = d.layout.map(row => repStatus(row, d.trts));
+      if (sts.some(s => s.blanks || s.bad)) { alert('Every plot needs a treatment number between 1 and ' + d.trts + '.'); return; }
+      if (sts.some(s => !s.ok) && !confirm('Some reps do not contain each treatment exactly once. Save anyway?')) return;
+      if (locked && JSON.stringify(trial.layout) !== JSON.stringify(d.layout) && !confirm('This trial has data. Changing the randomization will re-assign existing plot data to the new treatments. Continue?')) return;
+      d.layout = d.layout.map(row => row.map(Number));
+      delete d.plotList; delete d.grid;
+    }
     d.untreated = Number(d.untreated) || 0;
     d.trtNames = range(d.trts).map(k => (d.trtNames[k - 1] || '').trim());
     d.updated = Date.now();
@@ -859,18 +1048,18 @@ function viewTrialForm(trial) {
     if (n > 1 && !$('f-id').value.trim()) { alert('Please enter a Trial ID first.'); showStep(1); $('f-id').focus(); return; }
     if (n > 1) resize();
     showStep(n);
-    if (n === 3) { const e = [...$('rand').querySelectorAll('input:not(.sentinel)')].sort((x, y) => (+x.dataset.r - +y.dataset.r) || (+x.dataset.i - +y.dataset.i)).find(x => x.value === ''); if (e) e.focus(); }
+    if (n === 3 && !custom()) { const e = [...$('rand').querySelectorAll('input:not(.sentinel)')].sort((x, y) => (+x.dataset.r - +y.dataset.r) || (+x.dataset.i - +y.dataset.i)).find(x => x.value === ''); if (e) e.focus(); }
   }
   app.querySelectorAll('.step').forEach(b => b.onclick = () => goStep(+b.dataset.st));
   $('w-next').onclick = () => goStep(step + 1);
   $('w-back').onclick = () => goStep(step - 1);
-  drawNames(); drawRand(); showStep(1);
+  drawNames(); drawRand(); applyMode(); showStep(1);
   if (!editing) $('f-id').focus();
 }
 
 /* ---------- TRIAL DETAIL ---------- */
 function viewTrial(t) {
-  const n = t.reps * t.trts;
+  const n = plotCount(t);
   const as = [...t.assessments].sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.created - a.created);
   app.innerHTML = `
   <header class="top"><a class="back" href="#/">← Trials</a><h1>${esc(t.trialId)}</h1><a class="brand sm" href="#/" aria-label="FART – back to the home page"><b>FART</b><span>Field Assessment Recording Tool</span></a></header>
@@ -916,7 +1105,7 @@ function viewTrial(t) {
       <h2>Field layout</h2>
       <p class="small muted">Plot number and treatment for each plot.${t.untreated ? ' <span class="pill" style="background:var(--utc-bg);color:var(--ink)">Darker = untreated</span>' : ''}</p>
       <div class="scroll"><table class="map"><tbody>
-        ${t.layout.map((row, r) => `<tr><th class="l">Rep ${r + 1}</th>${row.map((k, i) => `<td><span class="pc ${k === t.untreated ? 'utc' : ''}"><b>${plotNo(t, r, i)}</b><span>T${k}${k === t.untreated ? ' · UTC' : ''}</span></span></td>`).join('')}</tr>`).reverse().join('')}
+        ${layoutRows(t).map(row => `<tr><th class="l">${row.label}</th>${row.cells.map(c => c.trt ? `<td><span class="pc ${c.trt === t.untreated ? 'utc' : ''}"><b>${c.plot}</b><span>T${c.trt}${isCustom(t) ? ' · R' + c.rep : (c.trt === t.untreated ? ' · UTC' : '')}</span></span></td>` : `<td><span class="pc buf"><b>${c.plot}</b><span>Buffer</span></span></td>`).join('')}</tr>`).reverse().join('')}
       </tbody></table></div>
       ${t.trtNames.some(Boolean) ? `<p class="small" style="margin-top:12px">${range(t.trts).map(k => `<b>T${k}</b> ${esc(trtName(t, k) || '—')}${k === t.untreated ? ' (UTC)' : ''}`).join(' · ')}</p>` : ''}
     </section>
@@ -940,7 +1129,7 @@ function viewTrial(t) {
   if (secSel) secSel.onchange = () => { if (secSel.value) t.section = secSel.value; else delete t.section; save(); toast('Home page section updated'); };
   document.getElementById('arch').onclick = () => {
     if (t.archived) { delete t.archived; t.updated = Date.now(); save(); toast('Trial unarchived'); viewTrial(t); return; }
-    const open = t.assessments.filter(a => !a.types.length || countDone(t, a) < t.reps * t.trts).length;
+    const open = t.assessments.filter(a => !a.types.length || countDone(t, a) < plotCount(t)).length;
     if (!confirm(`Archive ${t.trialId}?${open ? `\n\n${open} assessment date${open > 1 ? 's are' : ' is'} not finished yet.` : ''}\n\nIt moves to "Archived trials" on the home screen. Nothing is deleted and you can unarchive it any time.`)) return;
     t.archived = Date.now(); save(); toast('Trial archived'); go('#/');
   };
@@ -1471,7 +1660,7 @@ function boxPlotSvg(t, a, ty, sel) { // sel = { plot, t } highlights one point
 const OUTLIER_RATIO = 2, OUTLIER_FLOOR = 0.15;
 const medianOf = arr => { const v = arr.slice().sort((x, y) => x - y), m = v.length >> 1; return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2; };
 function viewReview(t, a) {
-  const n = t.reps * t.trts;
+  const n = plotCount(t);
   const done = countDone(t, a);
   const order = walkOrder(t, a);
   const idxOf = plot => order.findIndex(q => q.plot === plot);
@@ -1482,6 +1671,7 @@ function viewReview(t, a) {
   <header class="top"><a class="back" href="#/trial/${t.id}">← ${esc(t.trialId)}</a><h1>Review · ${esc(dmy(a.date))}</h1><a class="brand sm" href="#/" aria-label="FART – back to the home page"><b>FART</b><span>Field Assessment Recording Tool</span></a></header>
   <main>
     <p class="small muted">${done} of ${n} plots complete. These are the raw values, grouped by treatment. Edit any value directly; tap a plot number to open that plot.</p>
+    ${bufferPlots(t).length ? `<p class="small muted">Buffer plots (no values recorded): ${bufferPlots(t).map(b => b.plot).sort((x, y) => x - y).join(', ')}</p>` : ''}
     <div class="actions">
       <a class="btn" href="${base}/plot/${firstIncomplete(t, a)}">← Back to plots</a>
       <button id="xl" class="primary">Export…</button>
@@ -1642,7 +1832,7 @@ function excelFile(t, only) {
 
   // 1. Plot data (wide) – raw values as recorded
   const wide = [...detail, [], [...['Plot', 'Rep', 'Trt', 'Treatment', 'Crop', 'Crop code'].map(B), ...cols.map(c => B(c.label)), ...noteCols.map(a => B(`Notes ${dmy(a.date)}`))]];
-  ps.forEach(p => wide.push([p.plot, p.rep, p.trt, trtName(t, p.trt) || null, cp.name || null, cp.code || null,
+  [...ps.map(p => ({ p })), ...bufferPlots(t).map(b => ({ b }))].sort((x, y) => (x.p || x.b).plot - (y.p || y.b).plot).forEach(({ p, b }) => b ? wide.push([b.plot, b.rep, null, 'Buffer', cp.name || null, cp.code || null, ...cols.map(() => 'Buffer'), ...noteCols.map(() => null)]) : wide.push([p.plot, p.rep, p.trt, trtName(t, p.trt) || null, cp.name || null, cp.code || null,
     ...cols.map(c => applies(t, c.ty, p.trt) ? cell(colVal(c, p.plot)) : null), ...noteCols.map(a => (a.data[p.plot] && a.data[p.plot]._note) || null)]));
 
   // 2. Long format (one row per recorded value, one per subsample — good for pivot tables, R, ARM import)
@@ -1653,18 +1843,20 @@ function excelFile(t, only) {
   })));
 
   // 3. Field layout
-  const lay = [...detail, [], [B('Rep'), B(''), ...range(t.trts).map(i => B(`Position ${i}`))]];
-  for (let r = t.layout.length - 1; r >= 0; r--) { // rep 1 at the bottom, like the field
-    lay.push([B(`Rep ${r + 1}`), 'Plot', ...t.layout[r].map((_, i) => plotNo(t, r, i))]);
-    lay.push([null, 'Trt', ...t.layout[r]]);
+  const lrw = layoutRows(t), maxc = Math.max(1, ...lrw.map(r => r.cells.length));
+  const lay = [...detail, [], [B('Rep'), B(''), ...range(maxc).map(i => B(`Position ${i}`))]];
+  for (let r = lrw.length - 1; r >= 0; r--) { // rep 1 at the bottom, like the field
+    lay.push([B(lrw[r].label), 'Plot', ...lrw[r].cells.map(c => c.plot)]);
+    lay.push([null, 'Trt', ...lrw[r].cells.map(c => c.trt || 'Buffer')]);
+    if (isCustom(t)) lay.push([null, 'Rep', ...lrw[r].cells.map(c => c.trt ? c.rep : null)]);
   }
 
   // 4. Trial info
   const info = [[B('Trial ID'), t.trialId], [B('Description'), t.desc || null], [B('Untreated treatment'), t.untreated || null], [B('Trial type'), t.type || null], [B('Crop'), cp.name || null], [B('Crop code'), cp.code || null], [B('Reps'), t.reps], [B('Treatments'), t.trts],
-    [B('Plots'), t.reps * t.trts], [B('Plot numbering'), t.numbering === 'seq' ? 'Sequential' : 'By rep (101, 201…)'],
+    [B('Plots'), plotCount(t)], [B('Buffer plots'), bufferPlots(t).length || null], [B('Randomization'), isCustom(t) ? 'Custom randomization' : 'Regular RCB'], [B('Plot numbering'), isCustom(t) ? 'Custom' : t.numbering === 'seq' ? 'Sequential' : 'By rep (101, 201…)'],
     [B('Exported'), new Date().toLocaleString('en-GB')], [B('NA'), 'Plot not assessed'], [], [B('Trt'), B('Treatment name')], ...range(t.trts).map(k => [k, trtName(t, k) || null]),
     [], [B('Date'), B('Assessor'), B('Crop BBCH (majority)'), B('BBCH min'), B('BBCH max'), B('Assessment types'), B('Plots complete'), B('Notes')],
-    ...as.map(a => [dmy(a.date), a.assessor || null, a.cropBBCH || null, a.cropBBCHMin || null, a.cropBBCHMax || null, a.types.map(typeLabel).join('; '), `${countDone(t, a)} / ${t.reps * t.trts}`, a.notes || null])];
+    ...as.map(a => [dmy(a.date), a.assessor || null, a.cropBBCH || null, a.cropBBCHMin || null, a.cropBBCHMax || null, a.types.map(typeLabel).join('; '), `${countDone(t, a)} / ${plotCount(t)}`, a.notes || null])];
 
   const blob = buildXlsx([
     { name: 'Plot Data', rows: wide, freeze: detail.length <= 5 ? detail.length + 2 : false },
@@ -1768,14 +1960,14 @@ function pdfFile(t, list) {
     });
     // plot data, one row per plot (split across several tables when there are many columns)
     newPage(); line(`Plot data – ${dmy(a.date)}   (NA = plot not assessed)`, 12, true, 4);
-    const dc = [...expandCols([a]), { note: true, label: 'Plot note' }], prow = plots(t).sort((x, y2) => x.plot - y2.plot), avail = W - 2 * M - 200;
+    const dc = [...expandCols([a]), { note: true, label: 'Plot note' }], prow = [...plots(t), ...bufferPlots(t)].sort((x, y2) => x.plot - y2.plot), avail = W - 2 * M - 200;
     const chunks = []; let curC = [], used = 0;
     dc.forEach(c => { const w = c.note ? 140 : 66; if (used + w > avail && curC.length) { chunks.push(curC); curC = []; used = 0; } curC.push(c); used += w; });
     if (curC.length) chunks.push(curC);
     chunks.forEach((chunk, i) => {
       if (i) ensure(80);
       table(['Plot', 'Rep', 'Trt', 'Treatment', ...chunk.map(c => c.label)],
-        prow.map(p => [p.plot, p.rep, p.trt, trtName(t, p.trt) + (p.trt === t.untreated ? ' *' : ''), ...chunk.map(c => c.note ? ((a.data[p.plot] || {})._note || '') : (applies(t, c.ty, p.trt) ? colVal(c, p.plot) : ''))]),
+        prow.map(p => !(p.trt > 0) ? [p.plot, p.rep, '', 'Buffer', ...chunk.map(c => c.note ? '' : 'Buffer')] : [p.plot, p.rep, p.trt, trtName(t, p.trt) + (p.trt === t.untreated ? ' *' : ''), ...chunk.map(c => c.note ? ((a.data[p.plot] || {})._note || '') : (applies(t, c.ty, p.trt) ? colVal(c, p.plot) : ''))]),
         [40, 30, 30, 100, ...chunk.map(c => c.note ? 140 : 66)], 8);
     });
     const notes = Object.entries(a.data).filter(([, r]) => r._note).sort((x, y2) => x[0] - y2[0]);
@@ -1783,9 +1975,10 @@ function pdfFile(t, list) {
   });
   // field layout, rep 1 at the bottom
   newPage(sorted.length === 1 ? buildHdr(sorted[0]) : trialHdr); line('Field layout', 12, true, 4);
-  const lw = [50, ...range(t.trts).map(() => Math.max(34, Math.min(60, (W - 2 * M - 50) / t.trts)))];
-  const lrows = []; for (let r = t.reps - 1; r >= 0; r--) lrows.push([`Rep ${r + 1}`, ...t.layout[r].map((k, i) => `${plotNo(t, r, i)} T${k}${k === t.untreated ? '*' : ''}`)]);
-  table(['', ...range(t.trts).map(i => String(i))], lrows, lw, 8);
+  const lrw = layoutRows(t), maxc = Math.max(1, ...lrw.map(r => r.cells.length));
+  const lw = [50, ...range(maxc).map(() => Math.max(34, Math.min(60, (W - 2 * M - 50) / maxc)))];
+  const lrows = lrw.slice().reverse().map(r => [r.label, ...r.cells.map(c => c.trt ? `${c.plot} T${c.trt}${isCustom(t) ? ' R' + c.rep : ''}${c.trt === t.untreated ? '*' : ''}` : `${c.plot} Buffer`)]);
+  table(['', ...range(maxc).map(i => String(i))], lrows, lw, 8);
   if (t.untreated) line('* UTC (untreated)', 8, false, 2);
   pages.forEach((pg, i) => { // header (assessment details + page x of y) on every page
     cur = pg.ops; let yy = H - M;
@@ -1931,7 +2124,7 @@ function zipStore(files, type) { // uncompressed ZIP — valid for .xlsx
 /* ---------- app version ---------- */
 function showVersion() {
   const el = document.getElementById('app-ver'); if (!el) return;
-  el.textContent = `App version ${APP_VERSION}`;
+  el.textContent = `App version ${APP_VERSION} · updated ${APP_BUILT}`;
   if (window.caches) caches.keys().then(keys => {
     const newest = Math.max(0, ...keys.filter(k => k.startsWith('field-assessments-v')).map(k => parseInt(k.split('-v')[1], 10) || 0));
     if (newest > APP_VERSION && document.getElementById('app-ver')) document.getElementById('app-ver').textContent += ` · version ${newest} has been downloaded – close and reopen the app to use it`;
