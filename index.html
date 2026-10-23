@@ -276,7 +276,7 @@ details summary { cursor:pointer; font-weight:600; min-height:32px; }
 </div>
 <script>
 'use strict';
-const APP_VERSION = 31;
+const APP_VERSION = 33;
 const APP_BUILT = '23/10/2026'; // date this version was made // keep in step with VERSION in sw.js
 /* ---------- storage ---------- */
 const KEY = 'fieldAssessments.v1';
@@ -647,7 +647,8 @@ function viewHome() {
         + (loose.length ? `${secs.length ? '<h3 id="other-h" style="margin:18px 0 8px">Other trials</h3>' : ''}<div id="other-list" class="list">${loose.map(card).join('')}</div>` : '');
     })()
     : `<div class="card empty"><h2>${archived.length ? 'No active trials' : 'No trials yet'}</h2><p>Add a trial to set up reps, treatments and your randomization.</p>
-        <a class="btn primary" href="#/trial/new">+ Add trial</a></div>`}
+        <a class="btn primary" href="#/trial/new">+ Add trial</a>
+        <p style="margin:12px 0 0"><label class="btn">Import a shared trial<input type="file" class="import-share" accept=".json,application/json" hidden></label></p></div>`}
     ${archived.length ? `<details id="arch-box" class="card subtle" style="margin-top:16px"><summary>Archived trials (${archived.length})</summary>
       ${archived.map(t => `<div class="arow" data-s="${esc([t.trialId, t.desc, t.type, t.crop].filter(Boolean).join(' ').toLowerCase())}" style="padding:10px 0;border-bottom:1px solid var(--line)"><a href="#/trial/${t.id}"><b>${esc(t.trialId)}</b></a>
         <span class="small muted">${t.assessments.length} assessment${t.assessments.length === 1 ? '' : 's'}</span><button class="small" data-unarch="${t.id}">Unarchive</button></div>`).join('')}</details>` : ''}
@@ -661,6 +662,7 @@ function viewHome() {
       <div class="actions">
         <button id="backup">Export backup (.json)</button>
         <label class="btn">Restore backup<input type="file" id="restore" accept=".json,application/json" hidden></label>
+        <label class="btn">Import shared trial<input type="file" class="import-share" accept=".json,application/json" hidden></label>
       </div>
     </section>
   </main>`;
@@ -691,6 +693,7 @@ function viewHome() {
   document.getElementById('backup').onclick = () => { doBackup(); viewHome(); };
   const bk = document.getElementById('bk-now'); if (bk) bk.onclick = () => { doBackup(); viewHome(); };
   document.getElementById('contrast').onchange = e => { db.settings.contrast = e.target.checked; applyContrast(); save(); };
+  app.querySelectorAll('input.import-share').forEach(inp => inp.onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) importShared(f); });
   document.getElementById('restore').onchange = async e => {
     const f = e.target.files[0]; if (!f) return;
     try {
@@ -1145,6 +1148,7 @@ function viewTrial(t) {
     <div class="actions">
       <a class="btn primary" href="#/trial/${t.id}/a/new">+ New assessment date</a>
       <button id="xl" ${t.assessments.length ? '' : 'disabled'}>Export all…</button>
+      <button id="share">Share trial</button>
       <a class="btn" href="#/trial/${t.id}/edit">Edit trial</a>
       <button id="arch">${t.archived ? 'Unarchive' : 'Archive trial'}</button>
       <button id="del" class="danger">Delete trial</button>
@@ -1179,7 +1183,7 @@ function viewTrial(t) {
     <section class="card">
       <h2>Field layout</h2>
       <p class="small muted">Plot number and treatment for each plot.${t.untreated ? ' <span class="pill" style="background:var(--utc-bg);color:var(--ink)">Darker = untreated</span>' : ''}</p>
-      ${layoutSets(t).map(st => `${st.name ? `<div class="setname">${esc(st.name)}</div>` : ''}<div class="scroll"><table class="map"><tbody>
+      ${layoutSets(t).slice().reverse().map(st => `${st.name ? `<div class="setname">${esc(st.name)}</div>` : ''}<div class="scroll"><table class="map"><tbody>
         ${st.rows.map(row => `<tr>${row.label ? `<th class="l">${row.label}</th>` : ''}${row.cells.map(c => c.trt ? `<td><span class="pc ${c.trt === t.untreated ? 'utc' : ''} ${isCustom(t) ? repClass(c.rep) : ''}"><b>${c.plot}</b><span>T${c.trt}${isCustom(t) ? '' : (c.trt === t.untreated ? ' · UTC' : '')}</span></span></td>` : `<td><span class="pc buf"><b>${c.plot}</b><span>Buffer</span></span></td>`).join('')}</tr>`).reverse().join('')}
       </tbody></table></div>${isCustom(t) ? `<div class="replegend">${[...new Set(st.rows.flatMap(r => r.cells.filter(c => c.trt).map(c => c.rep)))].sort((x, y) => x - y).map(rp => `<span class="rl ${repClass(rp)}">Rep ${rp}</span>`).join('')}</div>` : ''}`).join('')}
       ${t.trtNames.some(Boolean) ? `<p class="small" style="margin-top:12px">${range(t.trts).map(k => `<b>T${k}</b> ${esc(trtName(t, k) || '—')}${k === t.untreated ? ' (UTC)' : ''}`).join(' · ')}</p>` : ''}
@@ -1191,6 +1195,7 @@ function viewTrial(t) {
     </div>
   </main>`;
   document.getElementById('xl').onclick = () => openExport(t, null);
+  document.getElementById('share').onclick = () => shareTrial(t);
   app.querySelectorAll('[data-lock]').forEach(b => b.onclick = () => {
     if (!confirm('Lock this date? Values cannot be changed until you unlock it.')) return;
     t.assessments.find(x => x.id === b.dataset.lock).locked = Date.now(); t.updated = Date.now(); save(); viewTrial(t);
@@ -1753,7 +1758,7 @@ function viewReview(t, a) {
       <button id="lock">${a.locked ? '🔒 Unlock' : 'Lock this date'}</button>
     </div>
     ${a.locked ? '<section class="card warnbox"><b>🔒 Locked.</b> Values cannot be changed until you unlock this date.</section>' : ''}
-    <div class="legend" style="margin-bottom:12px"><span><i class="sw miss"></i>Missing</span><span><i class="sw out"></i>Out of range, not a number, or a rep that is far from the others in its treatment</span></div>
+    <div class="legend" id="legend" style="margin-bottom:12px" hidden><span id="lg-miss" hidden><i class="sw miss"></i>Missing</span><span id="lg-out" hidden><i class="sw out"></i>Out of range, not a number, or a rep that is far from the others in its treatment</span></div>
     <section class="card" id="issues"></section>
     <section class="card"><div class="arow"><div><h2 style="margin:0">Box plots</h2><span class="small muted">Spread of the reps for each treatment, one chart per assessment.</span></div>
       <button id="bp-toggle" class="small">Show box plots</button></div><div id="bp"></div></section>
@@ -1834,6 +1839,9 @@ function viewReview(t, a) {
       else if (rng) flagged.push({ ty, html: `plot ${link(p.plot)} = ${esc(raw)} (${rng === 'warn' ? 'not a number' : 'out of range'})` });
     }));
     const miss = [...missing].sort((x, y) => x - y);
+    // the key only lists what is actually showing on this page
+    document.getElementById('lg-miss').hidden = !miss.length; document.getElementById('lg-out').hidden = !flagged.length;
+    document.getElementById('legend').hidden = !miss.length && !flagged.length;
     document.getElementById('issues').innerHTML = (!miss.length && !flagged.length)
       ? `<b class="rep-ok">✓ No missing or flagged values.</b>`
       : `<h3>Check these</h3><ul class="issues small">
@@ -1920,7 +1928,7 @@ function excelFile(t, only) {
 
   // 3. Field layout
   const lay = [...detail, []];
-  layoutSets(t).forEach(st => {
+  layoutSets(t).slice().reverse().forEach(st => { // first crop / variety at the bottom, like the field
     if (st.name) lay.push([B(st.name)]);
     const maxc = Math.max(1, ...st.rows.map(r => r.cells.length));
     lay.push([B(isCustom(t) ? '' : 'Rep'), B(''), ...range(maxc).map(i => B(`Position ${i}`))]);
@@ -2056,7 +2064,7 @@ function pdfFile(t, list) {
   });
   // field layout, rep 1 at the bottom
   newPage(sorted.length === 1 ? buildHdr(sorted[0]) : trialHdr); line('Field layout', 12, true, 4);
-  layoutSets(t).forEach(st => {
+  layoutSets(t).slice().reverse().forEach(st => { // first crop / variety at the bottom, like the field
     if (st.name) line(st.name, 10, true, 3);
     const maxc = Math.max(1, ...st.rows.map(r => r.cells.length));
     const lw = [isCustom(t) ? 4 : 50, ...range(maxc).map(() => Math.max(34, Math.min(60, (W - 2 * M - 50) / maxc)))];
@@ -2086,6 +2094,57 @@ function pdfFile(t, list) {
   out += `xref\n0 ${total + 1}\n0000000000 65535 f \n` + offs.slice(1).map(o => String(o).padStart(10, '0') + ' 00000 n \n').join('');
   out += `trailer\n<< /Size ${total + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
   return { blob: new Blob([Uint8Array.from(out, c => c.charCodeAt(0))], { type: 'application/pdf' }), name: exportName(t, list.length === 1 ? list[0] : null) + '.pdf' };
+}
+
+/* ---------- share a trial with another device ---------- */
+function shareTrial(t) { // the whole trial (layout, assessments and values) as one small file
+  const { section, archived, ...trial } = t;
+  const payload = { fart: 'trial-share', appVersion: APP_VERSION, sharedAt: Date.now(), trial };
+  const name = `${t.trialId.replace(/[^\w.-]+/g, '_')}_FART_shared_${dmy(today()).replace(/\//g, '-')}.json`;
+  downloadMany([{ blob: new Blob([JSON.stringify(payload)], { type: 'application/json' }), name }]);
+  toast('Trial file ready – send it to the other device');
+}
+function mergeTrial(local, inc) { // bring another device's values into this copy of the trial; nothing of yours is overwritten
+  const r = { addedDates: 0, filled: 0, conflicts: 0, lockedSkipped: 0 };
+  (inc.assessments || []).forEach(ia => {
+    const la = local.assessments.find(x => x.id === ia.id);
+    if (!la) { local.assessments.push(ia); r.addedDates++; return; }
+    if (la.locked) { r.lockedSkipped++; return; }
+    (ia.types || []).forEach(ty => { if (!la.types.some(x => x.id === ty.id)) la.types.push(ty); });
+    Object.entries(ia.data || {}).forEach(([plot, rec]) => {
+      const lr = la.data[plot] || (la.data[plot] = {}), touched = new Set();
+      Object.entries(rec).forEach(([k, v]) => {
+        const lv = lr[k];
+        if (Array.isArray(v)) { // subsamples: fill the empty boxes
+          const arr = Array.isArray(lv) ? lv.slice() : []; let changed = false;
+          v.forEach((x, i) => { if (x !== '' && (arr[i] === undefined || arr[i] === '')) { arr[i] = x; changed = true; r.filled++; } else if (x !== '' && String(arr[i]) !== String(x)) r.conflicts++; });
+          for (let i = 0; i < arr.length; i++) if (arr[i] === undefined) arr[i] = '';
+          if (changed) { lr[k] = arr; touched.add(k.slice(3)); }
+        } else if (lv === undefined || lv === '') { lr[k] = v; r.filled++; }
+        else if (String(lv) !== String(v) && k !== '_note') r.conflicts++;
+      });
+      touched.forEach(id => { const m = subMean(lr['_s_' + id] || []); if (m === null) delete lr[id]; else lr[id] = m; });
+      if (!Object.keys(lr).length) delete la.data[plot];
+    });
+  });
+  local.updated = Date.now(); return r;
+}
+async function importShared(file) {
+  try {
+    const d = JSON.parse(await file.text());
+    const list = d.fart === 'trial-share' && d.trial ? [d.trial] : Array.isArray(d.trials) ? d.trials : null;
+    if (!list || !list.length) throw new Error('not a trial file');
+    const msgs = [];
+    for (const nt of list) {
+      migrateDb({ trials: [nt] }); delete nt.section;
+      const i = db.trials.findIndex(x => x.id === nt.id);
+      if (i < 0) { db.trials.push(nt); msgs.push(`${nt.trialId}: added to this device`); continue; }
+      if (!confirm(`${nt.trialId} is already on this device.\n\nMerge the shared copy into it? Values and assessment dates you don't have yet are added. Anything you already entered is kept as it is.`)) { msgs.push(`${nt.trialId}: skipped`); continue; }
+      const r = mergeTrial(db.trials[i], nt);
+      msgs.push(`${nt.trialId}: ${r.addedDates} new date${r.addedDates === 1 ? '' : 's'}, ${r.filled} value${r.filled === 1 ? '' : 's'} added${r.conflicts ? `, ${r.conflicts} different value${r.conflicts === 1 ? '' : 's'} left as yours` : ''}${r.lockedSkipped ? `, ${r.lockedSkipped} locked date${r.lockedSkipped === 1 ? '' : 's'} left alone` : ''}`);
+    }
+    save(); alert(msgs.join('\n')); viewHome();
+  } catch (err) { alert('That file is not a shared FART trial.'); }
 }
 
 /* ---------- export chooser ---------- */
