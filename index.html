@@ -278,6 +278,26 @@ body.kb-on main { padding-bottom:200px; }
 .pills { display:flex; flex-wrap:wrap; gap:6px; margin-top:.4rem; }
 details summary { cursor:pointer; font-weight:600; min-height:32px; }
 .top .back { white-space:normal; word-break:break-all; line-height:1.15; font-size:.92rem; flex:0 1 auto; overflow:visible; text-overflow:clip; }
+button, a, .chip, label, input[type=checkbox], select, summary { touch-action:manipulation; }
+.ibtn { width:40px; min-height:40px; padding:0; border-radius:10px; flex:none; }
+.ibtn svg { width:20px; height:20px; display:block; }
+.ibtn.danger { color:var(--bad); }
+.vfoot { display:flex; justify-content:flex-end; margin-top:10px; }
+.dangerzone { display:flex; width:100%; margin-top:28px; color:var(--bad); border-color:var(--bad); font-weight:700; }
+.seg.mini { display:inline-flex; margin:2px 0 10px; gap:0; border:1px solid var(--line); border-radius:999px; overflow:hidden; background:var(--card); }
+.seg.mini button { flex:none; min-height:34px; padding:.2rem 1rem; font-size:.875rem; border:0; border-radius:0; background:transparent; }
+.seg.mini button.on { background:var(--accent); color:var(--accent-ink); }
+.appchips { display:flex; flex-wrap:wrap; gap:12px; margin:4px 0 10px; }
+.appchips .chip { width:46px; height:42px; min-height:42px; padding:0; border-radius:12px; font-size:1.05rem; font-weight:700; justify-content:center; }
+.trt-block { margin-bottom:.9rem; padding-bottom:.7rem; border-bottom:1px solid var(--line); }
+.trt-block .trt-row { margin-bottom:.4rem; }
+.trt-block .trt-apps { display:flex; align-items:center; flex-wrap:wrap; gap:12px; }
+.trt-block .trt-apps .lbl { font-size:.8rem; color:var(--muted); font-weight:600; }
+.trt-block .trt-apps .chip { width:46px; height:42px; min-height:42px; padding:0; border-radius:12px; font-size:1.05rem; font-weight:700; justify-content:center; }
+.draftcard { border-left:6px solid var(--warn); background:var(--warn-soft); }
+.draftcard h3 { margin:0 0 .2rem; }
+.sigpad { display:block; width:100%; height:170px; border:2px dashed var(--line); border-radius:12px; background:#fff; touch-action:none; }
+.h3s { margin:14px 0 6px; font-size:1rem; }
 </style>
 </head>
 <body>
@@ -292,7 +312,7 @@ details summary { cursor:pointer; font-weight:600; min-height:32px; }
 </div>
 <script>
 'use strict';
-const APP_VERSION = 36;
+const APP_VERSION = 37;
 // keep APP_VERSION in step with VERSION in sw.js
 const cap = s => { s = String(s ?? ''); return s.charAt(0).toUpperCase() + s.slice(1); }; // first letter capital, used for titles and headers
 /* ---------- storage ---------- */
@@ -329,9 +349,9 @@ function migrateDb(d) { // keeps older data and backups working
 function loadDB() {
   try {
     const s = localStorage.getItem(KEY);
-    if (s) { const d = JSON.parse(s); d.trials = d.trials || []; d.sections = d.sections || []; d.settings = d.settings || {}; return migrateDb(d); }
+    if (s) { const d = JSON.parse(s); d.trials = d.trials || []; d.sections = d.sections || []; d.settings = d.settings || {}; d.drafts = d.drafts || {}; d.signatures = d.signatures || {}; return migrateDb(d); }
   } catch (e) {}
-  return { trials: [], sections: [], settings: { showTrt: false } };
+  return { trials: [], sections: [], settings: { showTrt: false }, drafts: {}, signatures: {} };
 }
 function doBackup() {
   const ts = Date.now(), json = JSON.stringify(db, null, 1);
@@ -339,12 +359,53 @@ function doBackup() {
   download(new Blob([json], { type: 'application/json' }), `field-assessments-backup_${dmy(today()).replace(/\//g, '-')}.json`);
   toast('Backup saved');
 }
+const trialLine = t => `${t.reps} Reps × ${t.trts} Treatments${appLetters(t).length ? ` × ${appLetters(t).length} Application${appLetters(t).length === 1 ? '' : 's'}` : ''} · ${plotCount(t)} Plots`;
 const secOpts = sel => `<option value="">None (Other trials)</option>${db.sections.map(sc => `<option value="${sc.id}" ${sel === sc.id ? 'selected' : ''}>${esc(sc.name)}</option>`).join('')}`;
 const fmtDT = ts => { const x = new Date(ts), z = n => String(n).padStart(2, '0'); return `${z(x.getDate())}/${z(x.getMonth() + 1)}/${x.getFullYear()} ${z(x.getHours())}:${z(x.getMinutes())}`; };
 function save() {
   db.settings.lastSaved = Date.now(); // shown on the home screen as the last update
   try { localStorage.setItem(KEY, JSON.stringify(db)); return true; }
   catch (e) { toast('Could not save on this device. Export a backup now.'); return false; }
+}
+
+/* ---------- drafts: forms are saved at every step, so nothing typed is lost ---------- */
+function persistQuiet() { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) {} } // does not change "Last update"
+let draftTimer = null, draftPending = null;
+function queueDraft(key, make) { // make() builds {data, step}; waits a moment so fast typing is saved once
+  draftPending = { key, make }; clearTimeout(draftTimer); draftTimer = setTimeout(flushDraft, 350);
+}
+function flushDraft() {
+  clearTimeout(draftTimer); const p = draftPending; draftPending = null; if (!p) return;
+  const r = p.make(); if (!r) return;
+  db.drafts[p.key] = { data: r.data, step: r.step, saved: Date.now() }; persistQuiet();
+}
+const getDraft = key => (db.drafts || {})[key] || null;
+function dropDraft(key) { if (draftPending && draftPending.key === key) { draftPending = null; clearTimeout(draftTimer); } if (db.drafts && db.drafts[key]) { delete db.drafts[key]; persistQuiet(); } }
+function dropTrialDrafts(id) { Object.keys(db.drafts || {}).forEach(k => { if (k === 'trial:' + id || k.startsWith('assess:' + id + ':')) dropDraft(k); }); }
+function savedAgo(ts) {
+  const m = Math.floor((Date.now() - ts) / 6e4);
+  return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.floor(m / 60)} h ago` : fmtDT(ts);
+}
+window.addEventListener('pagehide', flushDraft);
+document.addEventListener('visibilitychange', () => { if (document.hidden) flushDraft(); });
+
+/* ---------- signature (kept on this device; stamped on every assessment made here) ---------- */
+const deviceId = () => db.settings.deviceId || (db.settings.deviceId = uid() + uid());
+const mySig = () => (db.signatures || {})[db.settings.signatureId] || null;
+function stampAssessment(a) { a.device = deviceId(); a.sigId = db.settings.signatureId || null; }
+function sigOf(a) { // the signature that goes on an assessment's exports
+  if (a && a.sigId && db.signatures[a.sigId]) return db.signatures[a.sigId];
+  if (a && a.device && a.device !== db.settings.deviceId) return null;
+  return mySig();
+}
+const sigsFor = list => { const o = {}; list.forEach(a => { if (a && a.sigId && db.signatures[a.sigId]) o[a.sigId] = db.signatures[a.sigId]; }); return o; };
+const adoptSigs = sigs => { Object.values(sigs || {}).forEach(sg => { if (sg && sg.id && sg.png && !db.signatures[sg.id]) db.signatures[sg.id] = sg; }); };
+function setSignature(sg) { // sg = a new signature, or null to remove this device's signature
+  const old = db.settings.signatureId, me = deviceId();
+  if (sg) { db.signatures[sg.id] = sg; db.settings.signatureId = sg.id; } else delete db.settings.signatureId;
+  db.trials.forEach(t => t.assessments.forEach(a => { if (!a.device || a.device === me) { a.device = me; a.sigId = sg ? sg.id : null; } }));
+  if (old && (!sg || old !== sg.id) && !db.trials.some(t => t.assessments.some(a => a.sigId === old))) delete db.signatures[old];
+  save();
 }
 
 /* ---------- helpers ---------- */
@@ -388,14 +449,14 @@ const LEAVES = ['Leaf 1', 'Leaf 2', 'Leaf 3', 'Leaf 4', 'Leaf 5', 'Leaf 6', 'Ear
 // n=name u=unit min/max  tg=needs a weed/pest  leaf=needs leaf level  untr=untreated plots only
 const PH = { u: '%', min: 0, max: 100, phyto: 1 };
 const MENUS = [
-  { key: 'common', label: 'Common assessments', items: [{ n: 'Samples' }, { n: 'General Phyto', ...PH }, { n: 'Chlorosis on Plants', ...PH }, { n: 'Deformation on Plants', ...PH }, { n: 'Stunting of Plants', ...PH }] },
-  { key: 'fungicide', label: 'Fungicide specific', target: 'pest', stageMode: 'code', groups: FUNG_PESTS, items: [{ n: 'Disease', u: '%', min: 0, max: 100, tg: 1, leaf: 1 }, { n: 'Green leaf area', u: '%', min: 0, max: 100, leaf: 1 }] },
-  { key: 'herbicide', label: 'Herbicide specific', target: 'weed', groups: null, items: [{ n: 'Weed counts', u: 'plants/m²', min: 0, tg: 1 }, { n: 'Weed control', u: '%', min: 0, max: 100, tg: 1 }, { n: 'Weed counts', label: 'Untreated weed counts', u: 'plants/m²', min: 0, tg: 1, untr: 1 }, { n: 'Crop count', u: 'plants/m²', min: 0, untr: 1 }] },
-  { key: 'sat', label: 'SAT specific', target: 'pest', noStage: true, groups: SAT_PESTS, items: [{ n: 'Emergence', u: '%', min: 0, max: 100 }, { n: 'Stand counts', u: 'plants/m²', min: 0 }, { n: 'Vigour', u: '0–9', min: 0, max: 9 }, { n: 'Seedling disease', u: '%', min: 0, max: 100, tg: 1 }, { n: 'Aphids/BYDV', min: 0, tg: 1 }] },
-  { key: 'insecticide', label: 'Insecticide specific', target: 'pest', groups: [], items: [{ n: 'Pest counts', min: 0, tg: 1 }, { n: 'Pest efficacy', u: '%', min: 0, max: 100, tg: 1 }, { n: 'Damage scoring', u: '%', min: 0, max: 100 }] },
-  { key: 'custom', label: 'Custom assessment', custom: true, items: [] },
-  { key: 'pgr', label: 'Growth regulator (PGR) specific', items: [{ n: 'Plant height', u: 'cm', min: 0 }, { n: 'Lodging %', u: '%', min: 0, max: 100 }, { n: 'Stem strength' }, { n: 'Tiller counts', u: 'no./m²', min: 0 }] },
-  { key: 'biostimulant', label: 'Biostimulant specific', items: [{ n: 'Vigour', u: '0–9', min: 0, max: 9 }, { n: 'Biomass' }, { n: 'Canopy', u: '%', min: 0, max: 100 }, { n: 'Stress recovery' }] },
+  { key: 'common', label: 'Common Assessments', items: [{ n: 'Samples' }, { n: 'General Phyto', ...PH }, { n: 'Chlorosis on Plants', ...PH }, { n: 'Deformation on Plants', ...PH }, { n: 'Stunting of Plants', ...PH }] },
+  { key: 'fungicide', label: 'Fungicide Specific', target: 'pest', stageMode: 'code', groups: FUNG_PESTS, items: [{ n: 'Disease', u: '%', min: 0, max: 100, tg: 1, leaf: 1 }, { n: 'Green leaf area', u: '%', min: 0, max: 100, leaf: 1 }] },
+  { key: 'herbicide', label: 'Herbicide Specific', target: 'weed', groups: null, items: [{ n: 'Weed counts', u: 'plants/m²', min: 0, tg: 1 }, { n: 'Weed control', u: '%', min: 0, max: 100, tg: 1 }, { n: 'Weed counts', label: 'Untreated weed counts', u: 'plants/m²', min: 0, tg: 1, untr: 1 }, { n: 'Crop count', u: 'plants/m²', min: 0, untr: 1 }] },
+  { key: 'sat', label: 'SAT Specific', target: 'pest', noStage: true, groups: SAT_PESTS, items: [{ n: 'Emergence', u: '%', min: 0, max: 100 }, { n: 'Stand counts', u: 'plants/m²', min: 0 }, { n: 'Vigour', u: '0–9', min: 0, max: 9 }, { n: 'Seedling disease', u: '%', min: 0, max: 100, tg: 1 }, { n: 'Aphids/BYDV', min: 0, tg: 1 }] },
+  { key: 'insecticide', label: 'Insecticide Specific', target: 'pest', groups: [], items: [{ n: 'Pest counts', min: 0, tg: 1 }, { n: 'Pest efficacy', u: '%', min: 0, max: 100, tg: 1 }, { n: 'Damage scoring', u: '%', min: 0, max: 100 }] },
+  { key: 'custom', label: 'Custom Assessment', custom: true, items: [] },
+  { key: 'pgr', label: 'Growth Regulator (PGR) Specific', items: [{ n: 'Plant height', u: 'cm', min: 0 }, { n: 'Lodging %', u: '%', min: 0, max: 100 }, { n: 'Stem strength' }, { n: 'Tiller counts', u: 'no./m²', min: 0 }] },
+  { key: 'biostimulant', label: 'Biostimulant Specific', items: [{ n: 'Vigour', u: '0–9', min: 0, max: 9 }, { n: 'Biomass' }, { n: 'Canopy', u: '%', min: 0, max: 100 }, { n: 'Stress recovery' }] },
 ];
 MENUS.forEach(m => { if (m.key !== 'common' && m.key !== 'custom') m.items.push({ n: 'General Phyto', ...PH }); }); // available under every menu
 const MENU_FOR = { 'Fungicide': ['fungicide'], 'BioFungicide': ['fungicide'], 'Herbicide': ['herbicide'], 'SAT (Seed Applied Treatment)': ['sat'], 'Insecticide': ['insecticide'], 'Growth Regulator (PGR)': ['pgr'], 'Biostimulant': ['biostimulant'] };
@@ -411,6 +472,17 @@ const WEEDS = [
 MENUS.find(m => m.key === 'herbicide').groups = WEEDS;
 const cropLabel = c => `${c[0]} (${c[1]})`;
 const isKnownCrop = s => CROPS.some(g => g[1].some(c => cropLabel(c) === s));
+
+function ensureVisible(el) {
+  if (!el || !el.getBoundingClientRect) return;
+  const sc = el.closest('main.entry'), v = window.visualViewport, bar = document.getElementById('kbbar');
+  const barH = document.body.classList.contains('kb-on') && bar ? bar.offsetHeight : 0;
+  const box = sc ? sc.getBoundingClientRect() : null;
+  const top = box ? box.top : (v ? v.offsetTop : 0), bot = box ? box.bottom : (v ? v.offsetTop + v.height : innerHeight) - barH;
+  const r = el.getBoundingClientRect();
+  if (r.top >= top + 6 && r.bottom <= bot - 6) return;
+  if (sc) sc.scrollTop += (r.top + r.bottom) / 2 - (top + bot) / 2; else el.scrollIntoView({ block: 'center' });
+}
 
 /* ---------- arrow bar above the keyboard (keeps the keyboard open while moving between boxes) ---------- */
 const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -432,7 +504,7 @@ const kb = (() => {
         shellEl.style.top = (v ? v.offsetTop : 0) + 'px'; shellEl.style.height = (v ? v.height : innerHeight) + 'px'; shellEl.style.paddingBottom = extra + 'px';
         const open = !!v && innerHeight - v.height > 120; shellEl.classList.toggle('kbd', open); // keyboard open: leave room to scroll the box clear of it
         const ae = document.activeElement;
-        if (open && ae && ae.tagName === 'INPUT' && shellEl.contains(ae)) requestAnimationFrame(() => ae.scrollIntoView({ block: 'center' }));
+        if (open && ae && ae.tagName === 'INPUT' && shellEl.contains(ae)) requestAnimationFrame(() => ensureVisible(ae));
       }
     }
   };
@@ -447,7 +519,7 @@ const kb = (() => {
     if (!tagged(e.target) || !handler || !coarse.matches || (isIOS && !db.settings.arrowBar)) return;
     bar.querySelectorAll('button[data-d]').forEach(b => { if (b.dataset.d !== 'done') b.hidden = !handler.dirs.includes(b.dataset.d); });
     bar.classList.add('show'); document.body.classList.add('kb-on'); place();
-    const el = e.target; setTimeout(() => { if (document.activeElement === el) el.scrollIntoView({ block: 'center' }); }, 300);
+    const el = e.target; setTimeout(() => { if (document.activeElement === el) ensureVisible(el); }, 300);
   });
   document.addEventListener('focusout', () => setTimeout(() => { if (!tagged(document.activeElement)) hide(); }, 80));
   const sentinel = (which, tab) => `<input class="sentinel" data-sent="${which}" ${tab ? `tabindex="${tab}"` : ''} inputmode="decimal" autocomplete="off" aria-hidden="true">`;
@@ -463,6 +535,17 @@ const kb = (() => {
     key(e) { const d = { ArrowUp: 'up', ArrowDown: 'down' }[e.key]; if (d && handler && handler.dirs.includes(d)) { e.preventDefault(); handler.go(d); return true; } return false; },
   };
 })();
+
+const ICON = {
+  lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>',
+  unlock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/></svg>',
+};
+function toggleLock(t, a, after) { // lock / unlock a date (asks first)
+  if (!a.locked) { if (!confirm('Lock this date? Values cannot be changed until you unlock it.')) return; a.locked = Date.now(); }
+  else { if (!confirm('Unlock this date so values can be edited?')) return; delete a.locked; }
+  t.updated = Date.now(); save(); after();
+}
 
 /* ---------- trial model ---------- */
 const getTrial = id => db.trials.find(t => t.id === id);
@@ -497,7 +580,7 @@ function layoutSets(t) { // for drawing the field: one block per crop / variety,
   return [{ name: '', rows: t.layout.map((row, r) => ({ label: `Rep ${r + 1}`, cells: row.map((k, i) => ({ plot: plotNo(t, r, i), trt: Number(k) })) })) }];
 }
 function walkOrder(t, a) { // a.serpentine (set while assessing) wins over the trial's default; custom lists keep the order they were typed in
-  const all = plots(t);
+  const all = scopedPlots(t, a);
   if (!(a && a.serpentine !== undefined ? a.serpentine : t.serpentine)) return all;
   const out = [];
   const grp = p => (p.set || 0) * 1e6 + (p.row != null ? p.row : p.rep); // custom grids reverse every other physical row
@@ -531,7 +614,19 @@ function trtOfPlot(t, plot) {
   if (!m) { m = new Map(plots(t).map(p => [p.plot, p.trt])); plotTrtCache.set(key, m); }
   return m.get(plot);
 }
-const applies = (t, ty, trt) => !ty.untreatedOnly || (!!t.untreated && trt === t.untreated);
+// Applications (A, B, C…): each treatment receives some of them; an assessment date can cover all of them or only some
+const appLetters = t => range(clamp(parseInt(t.apps, 10) || 0, 0, 26)).map(i => String.fromCharCode(64 + i));
+const trtApps = (t, trt) => ((t.trtApps && t.trtApps[trt - 1]) || []).filter(l => appLetters(t).includes(l));
+const isUtc = (t, trt) => !!t.untreated && trt === t.untreated;
+function inScope(t, a, trt) { // is this treatment assessed on this date?
+  if (!a || !a.apps || !appLetters(t).length) return true;
+  if (isUtc(t, trt)) return a.appsUntreated !== false;
+  return trtApps(t, trt).some(l => a.apps.includes(l));
+}
+const scopedPlots = (t, a) => plots(t).filter(p => inScope(t, a, p.trt));
+const nPlots = (t, a) => scopedPlots(t, a).length;
+const scopeText = (t, a) => !appLetters(t).length ? '' : !a || !a.apps ? 'All Applications' : `Application${a.apps.length === 1 ? '' : 's'} ${a.apps.join(', ') || '–'}${t.untreated ? (a.appsUntreated !== false ? ' + Untreated' : ' (Untreated Excluded)') : ''}`;
+const applies = (t, ty, trt, a) => (!a || inScope(t, a, trt)) && (!ty.untreatedOnly || (!!t.untreated && trt === t.untreated));
 // growth stage (+ size for weeds) is asked for weeds and insect pests, not for diseases
 const isHeight = ty => /height/i.test(ty.name) && !ty.target;
 const isPhyto = ty => !!ty.phyto || /phyto/i.test(ty.name);
@@ -551,7 +646,7 @@ const plotComplete = (t, a, plot) => a.types.length > 0 && (isNA(a, plot) || a.t
 // everything still to enter for a date, including the untreated counts
 function visitMissing(t, a) {
   let n = 0;
-  plots(t).forEach(p => { if (isNA(a, p.plot)) return; a.types.forEach(ty => { if (applies(t, ty, p.trt) && cellMissing(a, p.plot, ty)) n++; }); });
+  scopedPlots(t, a).forEach(p => { if (isNA(a, p.plot)) return; a.types.forEach(ty => { if (applies(t, ty, p.trt, a) && cellMissing(a, p.plot, ty)) n++; }); });
   return n;
 }
 function setSubValue(a, plot, ty, k, v) { // keeps the subsamples and stores their mean as the plot value
@@ -566,7 +661,7 @@ function setSubValue(a, plot, ty, k, v) { // keeps the subsamples and stores the
   return m;
 }
 const plotStarted = (a, plot) => isNA(a, plot) || a.types.some(ty => rawVal(a, plot, ty.id) !== '');
-const countDone = (t, a) => plots(t).filter(p => plotComplete(t, a, p.plot)).length;
+const countDone = (t, a) => scopedPlots(t, a).filter(p => plotComplete(t, a, p.plot)).length;
 function firstIncomplete(t, a) { const w = walkOrder(t, a); const i = w.findIndex(p => !plotComplete(t, a, p.plot)); return i < 0 ? 0 : i; }
 function outOfRange(ty, raw) {
   if (raw === '' || raw === 'NA') return '';
@@ -580,7 +675,7 @@ const typeLabel = ty => typeTitle(ty) + (ty.unit ? ` (${ty.unit})` : '');
 function typeStats(t, a, ty, si) {
   const groups = {};
   range(t.trts).forEach(k => groups[k] = { vals: [], nums: [] });
-  plots(t).forEach(p => {
+  scopedPlots(t, a).forEach(p => {
     if (si != null && (p.set || 0) !== si) return;
     const g = groups[p.trt]; if (!g) return;
     const raw = val(a, p.plot, ty.id); const n = num(raw);
@@ -621,7 +716,7 @@ document.addEventListener('click', e => { // tapping FART while already on the h
 });
 function render() {
   const p = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
-  window.scrollTo(0, 0); kb.hide(); kb.leave();
+  flushDraft(); window.scrollTo(0, 0); kb.hide(); kb.leave();
   if (p[0] === 'trial') {
     if (p[1] === 'new') return viewTrialForm(null);
     const t = getTrial(p[1]);
@@ -629,10 +724,10 @@ function render() {
     if (!p[2]) return viewTrial(t);
     if (p[2] === 'edit') return viewTrialForm(t);
     if (p[2] === 'a') {
-      if (p[3] === 'new') return viewAssessForm(t, null, 1);
+      if (p[3] === 'new') return viewAssessForm(t, null);
       const a = t.assessments.find(x => x.id === p[3]);
       if (!a) return viewTrial(t);
-      if (p[4] === 'edit') { if (a.locked) { toast('This date is locked – unlock it to edit'); return goReplace(`#/trial/${t.id}`); } return viewAssessForm(t, a, p[5] === '2' ? 2 : 1); }
+      if (p[4] === 'edit') { if (a.locked) { toast('This date is locked – unlock it to edit'); return goReplace(`#/trial/${t.id}`); } return viewAssessForm(t, a, p[5] === '2' ? 2 : p[5] === '1' ? 1 : undefined); }
       if (p[4] === 'review') return viewReview(t, a);
       if (p[4] === 'plot') return viewEntry(t, a, parseInt(p[5], 10) || 0);
       if (!a.types.length) return goReplace(`#/trial/${t.id}/a/${a.id}/edit/2`);
@@ -647,47 +742,52 @@ function viewHome() {
   const trials = db.trials.filter(t => !t.archived).sort((a, b) => (b.updated || 0) - (a.updated || 0));
   const archived = db.trials.filter(t => t.archived).sort((a, b) => (b.archived || 0) - (a.archived || 0));
   app.innerHTML = `
-  <header class="top"><h1 class="brand"><a class="brand-link" href="#/" aria-label="FART – home"><b>FART</b><span>Field Assessment Recording Tool</span></a></h1><a class="btn primary small" href="#/trial/new">+ Add trial</a></header>
+  <header class="top"><h1 class="brand"><a class="brand-link" href="#/" aria-label="FART – home"><b>FART</b><span>Field Assessment Recording Tool</span></a></h1><a class="btn primary small" href="#/trial/new">+ Add Trial</a></header>
   <main>
     ${db.trials.length ? (() => { const lb = db.settings.lastBackup, days = lb ? Math.floor((Date.now() - lb) / 864e5) : null, stale = !lb || days >= 7;
-      return `<div class="card ${stale ? 'warnbox' : ''}"><div class="arow"><div><b>Backup</b><div class="small">Last update: ${db.settings.lastSaved ? fmtDT(db.settings.lastSaved) : '–'}</div><div class="small">Last backup: ${lb ? (days === 0 ? 'today' : days === 1 ? '1 day ago' : days + ' days ago') : 'never'}</div></div>
-        <button id="bk-now" class="small ${stale ? 'primary' : ''}">Back up now</button></div></div>`; })() : ''}
+      return `<div class="card ${stale ? 'warnbox' : ''}"><div class="arow"><div><b>Backup</b><div class="small">Last Update: ${db.settings.lastSaved ? fmtDT(db.settings.lastSaved) : '–'}</div><div class="small">Last Backup: ${lb ? (days === 0 ? 'today' : days === 1 ? '1 day ago' : days + ' days ago') : 'never'}</div></div>
+        <button id="bk-now" class="small ${stale ? 'primary' : ''}">Back Up Now</button></div></div>`; })() : ''}
+    ${(() => { const dr = getDraft('trial:new'); return dr ? `<div class="card draftcard"><h3>Unfinished New Trial</h3><div class="small">${esc(dr.data.d.trialId || 'No Trial ID Yet')} · Saved ${savedAgo(dr.saved)}</div>
+      <div class="actions" style="margin:10px 0 0"><a class="btn primary small" href="#/trial/new">Continue</a><button class="small" id="dr-new-x" type="button">Discard</button></div></div>` : ''; })()}
     ${trials.length ? (() => {
       const card = t => `<div class="card trial-card" data-s="${esc([t.trialId, t.desc, t.type, t.crop, (db.sections.find(x => x.id === t.section) || {}).name].filter(Boolean).join(' ').toLowerCase())}"><a class="tc-link" href="#/trial/${t.id}">
         <h2>${esc(t.trialId)}</h2>
         ${t.desc ? `<p class="muted">${esc(t.desc)}</p>` : ''}
         ${(t.type || t.crop) ? `<div class="pills">${t.type ? `<span class="pill">${esc(t.type)}</span>` : ''}${t.crop ? `<span class="pill">${esc(t.crop)}</span>` : ''}</div>` : ''}
-        <div class="small muted" style="margin-top:.4rem">${t.reps} reps × ${t.trts} treatments · ${plotCount(t)} plots · updated ${fmtDT(t.updated || t.created || Date.now())} ·
-          <span class="pill">${t.assessments.length} assessment${t.assessments.length === 1 ? '' : 's'}</span></div>
+        <div class="small muted" style="margin-top:.4rem">${trialLine(t)} · Updated ${fmtDT(t.updated || t.created || Date.now())} ·
+          <span class="pill">${t.assessments.length} Assessment${t.assessments.length === 1 ? '' : 's'}</span></div>
       </a></div>`;
       const secs = db.sections, inSec = id => trials.filter(t => t.section === id), loose = trials.filter(t => !secs.some(sc => sc.id === t.section));
       return `<div class="searchrow"><label class="search"><input id="q" type="text" inputmode="search" enterkeyhint="search" placeholder="Search trials…" aria-label="Search trials by ID, crop, type or section" autocomplete="off" value="${esc(homeQuery)}"></label>
-          <button id="new-sec" type="button">+ New section</button></div>
+          <button id="new-sec" type="button">+ New Section</button></div>
         <p id="nomatch" class="muted" hidden>No trials match your search.</p>`
         + secs.map(sc => `<details class="card sec" data-sec="${sc.id}" ${sc.collapsed ? '' : 'open'}><summary><span class="sec-name">${esc(sc.name)}</span><span class="pill">${inSec(sc.id).length}</span>
             <span class="sec-btns"><button class="small" data-ren="${sc.id}" type="button">Rename</button><button class="icon-btn danger" data-delsec="${sc.id}" type="button" title="Delete section" aria-label="Delete section"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/></svg></button></span></summary>
             <div class="list" style="margin-top:12px">${inSec(sc.id).map(card).join('') || '<p class="small muted">No trials in this section yet. Open a trial and choose this section.</p>'}</div></details>`).join('')
-        + (loose.length ? `${secs.length ? '<h3 id="other-h" style="margin:18px 0 8px">Other trials</h3>' : ''}<div id="other-list" class="list">${loose.map(card).join('')}</div>` : '');
+        + (loose.length ? `${secs.length ? '<h3 id="other-h" style="margin:18px 0 8px">Other Trials</h3>' : ''}<div id="other-list" class="list">${loose.map(card).join('')}</div>` : '');
     })()
-    : `<div class="card empty"><h2>${archived.length ? 'No active trials' : 'No trials yet'}</h2><p>Add a trial to set up reps, treatments and your randomization.</p>
-        <a class="btn primary" href="#/trial/new">+ Add trial</a>
-        <p style="margin:12px 0 0"><label class="btn">Import a shared trial<input type="file" class="import-share" accept=".json,application/json" hidden></label></p></div>`}
-    ${archived.length ? `<details id="arch-box" class="card subtle" style="margin-top:16px"><summary>Archived trials (${archived.length})</summary>
+    : `<div class="card empty"><h2>${archived.length ? 'No Active Trials' : 'No Trials Yet'}</h2><p>Add a trial to set up reps, treatments and your randomization.</p>
+        <a class="btn primary" href="#/trial/new">+ Add Trial</a>
+        <p style="margin:12px 0 0"><label class="btn">Import a Shared Trial<input type="file" class="import-share" accept=".json,application/json" hidden></label></p></div>`}
+    ${archived.length ? `<details id="arch-box" class="card subtle" style="margin-top:16px"><summary>Archived Trials (${archived.length})</summary>
       ${archived.map(t => `<div class="arow" data-s="${esc([t.trialId, t.desc, t.type, t.crop].filter(Boolean).join(' ').toLowerCase())}" style="padding:10px 0;border-bottom:1px solid var(--line)"><a href="#/trial/${t.id}"><b>${esc(t.trialId)}</b></a>
-        <span class="small muted">${t.assessments.length} assessment${t.assessments.length === 1 ? '' : 's'}</span><button class="small" data-unarch="${t.id}">Unarchive</button></div>`).join('')}</details>` : ''}
+        <span class="small muted">${t.assessments.length} Assessment${t.assessments.length === 1 ? '' : 's'}</span><button class="small" data-unarch="${t.id}">Unarchive</button></div>`).join('')}</details>` : ''}
     <section class="card subtle" style="margin-top:24px">
       <p id="offline-status" class="small"></p>
       <p id="app-ver" class="small muted"></p>
-      <div class="actions" style="margin-top:0"><button id="chk-upd" class="small" type="button">Check for updates</button><span id="upd-msg" class="small muted"></span></div>
-      <h3>Backup &amp; move between devices</h3>
+      <div class="actions" style="margin-top:0"><button id="chk-upd" class="small" type="button">Check for Updates</button><span id="upd-msg" class="small muted"></span></div>
+      <h3>Backup &amp; Move Between Devices</h3>
       <p class="small muted">All data is saved in this browser on this device. Export a backup regularly, and use Restore to load it on another device.</p>
-      <label class="chk small" style="margin-bottom:12px"><input type="checkbox" id="contrast" ${db.settings.contrast ? 'checked' : ''}> ☀ Sunlight mode (high contrast, easier to read outdoors)</label>
-      <label class="chk small" style="margin-bottom:12px"><input type="checkbox" id="arrowbar" ${db.settings.arrowBar ? 'checked' : ''}> Show my own ◀ ▲ ▼ ▶ bar above the keyboard <span class="muted" style="font-weight:400">(iPhone/iPad already have their own arrows above the keyboard; Android always shows mine)</span></label>
+      <label class="chk small" style="margin-bottom:12px"><input type="checkbox" id="contrast" ${db.settings.contrast ? 'checked' : ''}> ☀ Sunlight Mode (high contrast, easier to read outdoors)</label>
+      <label class="chk small" style="margin-bottom:12px"><input type="checkbox" id="arrowbar" ${db.settings.arrowBar ? 'checked' : ''}> Show My Own ◀ ▲ ▼ ▶ Bar Above the Keyboard</label>
       <div class="actions">
-        <button id="backup">Export backup (.json)</button>
-        <label class="btn">Restore backup<input type="file" id="restore" accept=".json,application/json" hidden></label>
-        <label class="btn">Import shared trial<input type="file" class="import-share" accept=".json,application/json" hidden></label>
+        <button id="backup">Export Backup (.json)</button>
+        <label class="btn">Restore Backup<input type="file" id="restore" accept=".json,application/json" hidden></label>
+        <label class="btn">Import Shared Trial<input type="file" class="import-share" accept=".json,application/json" hidden></label>
       </div>
+      <h3 style="margin-top:20px">Signature</h3>
+      <p class="small muted">${mySig() ? '✓ Saved. ' : ''}Appears on exported files for every assessment made on this device.</p>
+      <div class="actions" style="margin-top:0"><button id="sig-btn" type="button">${mySig() ? 'Edit Signature' : 'Add Signature'}</button></div>
     </section>
   </main>`;
   updateOfflineStatus(); showVersion();
@@ -714,6 +814,8 @@ function viewHome() {
   });
   app.querySelectorAll('details.sec').forEach(dt => dt.addEventListener('toggle', () => { if (q && q.value.trim()) return; const sc = db.sections.find(x => x.id === dt.dataset.sec); if (sc && !!sc.collapsed === dt.open) { sc.collapsed = !dt.open; save(); } }));
   app.querySelectorAll('[data-unarch]').forEach(b => b.onclick = () => { const t = getTrial(b.dataset.unarch); delete t.archived; t.updated = Date.now(); save(); toast('Trial moved back to your list'); viewHome(); });
+  const drx = document.getElementById('dr-new-x'); if (drx) drx.onclick = () => { if (confirm('Discard this unfinished trial? Everything you entered will be lost.')) { dropDraft('trial:new'); viewHome(); } };
+  document.getElementById('sig-btn').onclick = () => openSignaturePad(() => viewHome());
   document.getElementById('arrowbar').onchange = e => { db.settings.arrowBar = e.target.checked; save(); };
   document.getElementById('backup').onclick = () => { doBackup(); viewHome(); };
   const bk = document.getElementById('bk-now'); if (bk) bk.onclick = () => { doBackup(); viewHome(); };
@@ -726,6 +828,7 @@ function viewHome() {
       if (!Array.isArray(d.trials)) throw new Error();
       if (!confirm(`Restore ${d.trials.length} trial(s) from backup? Trials already on this device with the same identity will be replaced; others are kept.`)) return;
       (d.sections || []).forEach(sec => { if (!db.sections.some(x => x.id === sec.id)) db.sections.push(sec); });
+      adoptSigs(d.signatures);
       d.trials.forEach(nt => { migrateDb({ trials: [nt] }); const i = db.trials.findIndex(t => t.id === nt.id); if (i >= 0) db.trials[i] = nt; else db.trials.push(nt); });
       save(); toast('Backup restored'); viewHome();
     } catch (err) { alert('That file is not a valid backup.'); }
@@ -735,58 +838,62 @@ function viewHome() {
 /* ---------- TRIAL FORM (add / edit + randomization) ---------- */
 function viewTrialForm(trial) {
   const editing = !!trial;
+  const key = 'trial:' + (editing ? trial.id : 'new'), draft = getDraft(key); // saved at every step; reopening carries on where you were
   const locked = editing && trial.assessments.some(a => Object.keys(a.data).length);
   const d = editing ? JSON.parse(JSON.stringify(trial)) : {
     id: uid(), trialId: '', desc: '', type: '', crop: '', untreated: 0, reps: 4, trts: 6, numbering: 'rep', serpentine: false,
-    trtNames: [], layout: null, assessments: [], created: Date.now()
+    trtNames: [], layout: null, assessments: [], created: Date.now(), apps: 0, trtApps: []
   };
+  if (draft) Object.assign(d, JSON.parse(JSON.stringify(draft.data.d)));
+  d.apps = clamp(parseInt(d.apps, 10) || 0, 0, 26); d.trtApps = d.trtApps || [];
   if (!d.layout) d.layout = blankLayout(d.reps, d.trts);
   d.randType = d.randType || 'rcb'; // 'rcb' = regular randomized complete block (default), 'custom' = plots typed in by hand
   d.plotList = d.plotList || [];
-  d.sets = (d.sets && d.sets.length ? d.sets : [{ name: '', grid: d.grid }]).map(x => ({ name: x.name || '', dims: x.grid || null, grid: null })); // crops / varieties of a custom randomization
+  d.sets = (d.sets && d.sets.length ? d.sets : [{ name: '', grid: d.grid }]).map(x => draft ? { name: x.name || '', dims: x.dims || null, grid: x.grid && x.grid.cells ? x.grid : null } : { name: x.name || '', dims: x.grid || null, grid: null }); // crops / varieties of a custom randomization
 
   app.innerHTML = `
-  <header class="top"><a class="back" href="${editing ? '#/trial/' + d.id : '#/'}">← Back</a><h1>${editing ? 'Edit trial' : 'Add trial'}</h1><a class="brand sm" href="#/" aria-label="FART – back to the home page"><b>FART</b><span>Field Assessment Recording Tool</span></a></header>
+  <header class="top"><a class="back" href="${editing ? '#/trial/' + d.id : '#/'}">← Back</a><h1>${editing ? 'Edit Trial' : 'Add Trial'}</h1><a class="brand sm" href="#/" aria-label="FART – back to the home page"><b>FART</b><span>Field Assessment Recording Tool</span></a></header>
   <main>
     <div class="steps" id="steps">
       <button class="step" data-st="1" type="button"><b>1</b> Describe</button>
       <button class="step" data-st="2" type="button"><b>2</b> Treatments</button>
-      <button class="step" data-st="3" type="button"><b>3</b> Plot layout</button>
+      <button class="step" data-st="3" type="button"><b>3</b> Plot Layout</button>
     </div>
     <section class="card" data-step="1">
-      <h2>Trial details</h2>
+      <h2>Trial Details</h2>
       <div class="grid2">
         <label class="field"><span>Trial ID *</span><input id="f-id" value="${esc(d.trialId)}" placeholder="e.g. GB27X01010H-SMW01" autocomplete="off" autocapitalize="characters" style="text-transform:uppercase"></label>
         <label class="field"><span>Description</span><input id="f-desc" value="${esc(d.desc)}" placeholder="Crop, site, protocol…"></label>
-        <label class="field"><span>Trial type</span>
+        <label class="field"><span>Trial Type</span>
           <select id="f-type"><option value="">— Select —</option>${TRIAL_TYPES.map(x => `<option ${d.type === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></label>
         <label class="field"><span>Crop</span>
           <select id="f-crop"><option value="">— Select —</option>
             ${CROPS.map(([g, items]) => `<optgroup label="${g}">${items.map(c => `<option value="${esc(cropLabel(c))}" ${d.crop === cropLabel(c) ? 'selected' : ''}>${esc(cropLabel(c))}</option>`).join('')}</optgroup>`).join('')}
             <option value="__other" ${d.crop && !isKnownCrop(d.crop) ? 'selected' : ''}>Other (type it in)…</option></select></label>
-        <label class="field" id="crop-other-wrap" ${d.crop && !isKnownCrop(d.crop) ? '' : 'hidden'}><span>Other crop</span>
+        <label class="field" id="crop-other-wrap" ${d.crop && !isKnownCrop(d.crop) ? '' : 'hidden'}><span>Other Crop</span>
           <input id="f-crop-other" value="${esc(d.crop && !isKnownCrop(d.crop) ? d.crop : '')}" placeholder="Crop name (CODE)" autocomplete="off"></label>
-        <label class="field" id="reps-wrap"><span>Number of reps *</span><input id="f-reps" type="number" inputmode="numeric" min="1" max="50" value="${d.reps}" ${locked ? 'disabled' : ''}></label>
-        <label class="field"><span>Number of treatments *</span><input id="f-trts" type="number" inputmode="numeric" min="1" max="200" value="${d.trts}" ${locked ? 'disabled' : ''}></label>
+        <label class="field" id="reps-wrap"><span>Number of Reps *</span><input id="f-reps" type="number" inputmode="numeric" min="1" max="50" value="${d.reps}" ${locked ? 'disabled' : ''}></label>
+        <label class="field"><span>Number of Treatments *</span><input id="f-trts" type="number" inputmode="numeric" min="1" max="200" value="${d.trts}" ${locked ? 'disabled' : ''}></label>
         <label class="field"><span>Randomization</span>
           <select id="f-rtype" ${locked ? 'disabled' : ''}>
             <option value="rcb" ${d.randType !== 'custom' ? 'selected' : ''}>Regular RCB</option>
             <option value="custom" ${d.randType === 'custom' ? 'selected' : ''}>Custom Randomization</option>
           </select></label>
-        <label class="field" id="num-wrap"><span>Plot numbering <span class="muted" style="font-weight:400">(also used by Auto-number in custom)</span></span>
+        <label class="field" id="num-wrap"><span>Plot Numbering <span class="muted" style="font-weight:400">(also used by Auto-Number in custom)</span></span>
           <select id="f-num" ${locked ? 'disabled' : ''}>
             <option value="rep" ${d.numbering === 'rep' ? 'selected' : ''}>By rep: 101, 102… 201, 202…</option>
             <option value="seq" ${d.numbering === 'seq' ? 'selected' : ''}>Sequential: 1, 2, 3…</option>
           </select></label>
-        <label class="field"><span>Walking order</span>
+        <label class="field"><span>Walking Order</span>
           <label class="chk" style="min-height:44px"><input type="checkbox" id="f-serp" ${d.serpentine ? 'checked' : ''}> Serpentine (reverse every other rep) – can also be switched while assessing</label></label>
       </div>
       ${locked ? `<p class="small muted">Reps, treatments, randomization type and plot numbering are locked because this trial already has assessment data.</p>` : ''}
     </section>
 
     <section class="card" data-step="2">
-      <h2>Treatment names <span class="muted small">(optional)</span></h2>
-      <p class="small muted">Tick <b>Untreated</b> on the untreated check. Some assessments (e.g. crop counts) can be recorded on those plots only.</p>
+      <h2>Treatments</h2>
+      <label class="field" style="max-width:260px"><span>How Many Applications?</span><input id="f-apps" type="number" inputmode="numeric" min="0" max="26" value="${d.apps}"></label>
+      <p class="small muted">Applications are lettered A, B, C… Tick the ones each treatment receives. Names are optional. Tick <b>Untreated</b> on the untreated check – some assessments (e.g. crop counts) can be recorded on those plots only.</p>
       <div id="trt-names"></div>
     </section>
 
@@ -794,34 +901,34 @@ function viewTrialForm(trial) {
       <h2 id="rand-title">Randomization</h2>
       <div id="rcb-block">
       <p class="small muted">Enter the treatment number for each plot from your protocol. The plot number is shown above each box. It jumps to the next box as you type, and ◀ ▲ ▼ ▶ move around. Each rep must contain every treatment once.</p>
-      <div class="actions"><button id="r-clear" class="small">Clear all</button></div>
+      <div class="actions"><button id="r-clear" class="small">Clear All</button></div>
       <div id="rand"></div>
       <details style="margin-top:12px">
         <summary>Faster: paste the randomization (from Excel or a protocol)</summary>
         <p class="small muted">Paste treatment numbers in plot order (one row per rep, or one long column), or two columns of <b>plot number</b> and <b>treatment</b>. Spaces, commas and tabs all work.</p>
         <textarea id="paste" placeholder="3 1 4 2 6 5&#10;2 5 1 6 3 4&#10;…"></textarea>
-        <div class="actions"><button id="paste-go" class="small">Apply pasted randomization</button></div>
+        <div class="actions"><button id="paste-go" class="small">Apply Pasted Randomization</button></div>
       </details>
       </div>
       <div id="cust-block" hidden>
         <p class="small muted">Type your plots into the grid. Start with the <b>Plot no.</b> tab, then <b>Rep</b> (worked out for you from the treatments, so you only change it if it's wrong), then <b>Treatment</b>. Type <b>0</b> as the treatment for an empty buffer plot – no values are recorded on it.</p>
         <div id="set-bar" class="seg" style="flex-wrap:wrap" hidden></div>
-        <label class="field"><span>Crop / variety name <span class="muted" style="font-weight:400">(optional)</span></span><input id="g-setname" placeholder="e.g. Barley, Wheat, Variety A" autocomplete="off"></label>
+        <label class="field"><span>Crop / Variety Name <span class="muted" style="font-weight:400">(optional)</span></span><input id="g-setname" placeholder="e.g. Barley, Wheat, Variety A" autocomplete="off"></label>
         <div class="grid2">
-          <label class="field"><span>Plots across</span><input id="g-across" type="number" inputmode="numeric" min="1" max="60"></label>
-          <label class="field"><span>Plots up</span><input id="g-up" type="number" inputmode="numeric" min="1" max="60"></label>
+          <label class="field"><span>Plots Across</span><input id="g-across" type="number" inputmode="numeric" min="1" max="60"></label>
+          <label class="field"><span>Plots Up</span><input id="g-up" type="number" inputmode="numeric" min="1" max="60"></label>
         </div>
-        <div class="seg" id="g-tabs"><button type="button" data-l="plot">Plot no.</button><button type="button" data-l="rep">Rep</button><button type="button" data-l="trt">Treatment</button></div>
+        <div class="seg" id="g-tabs"><button type="button" data-l="plot">Plot No.</button><button type="button" data-l="rep">Rep</button><button type="button" data-l="trt">Treatment</button></div>
         <div id="g-grid"></div>
         <div id="rep-legend" class="replegend"></div>
         <p id="c-status" class="small"></p>
-        <div class="actions"><button id="g-autoplot" class="small" type="button">Auto-number plots</button><button id="g-autorep" class="small" type="button">Recalculate reps</button><button id="g-clear" class="small danger" type="button">Clear tab</button></div>
-        <div class="actions"><button id="g-dup" class="small primary" type="button">Duplicate for another crop / variety</button><button id="g-delset" class="small danger" type="button" hidden>Delete this crop / variety</button></div>
+        <div class="actions"><button id="g-autoplot" class="small" type="button">Auto-Number Plots</button><button id="g-autorep" class="small" type="button">Recalculate Reps</button><button id="g-clear" class="small danger" type="button">Clear Tab</button></div>
+        <div class="actions"><button id="g-dup" class="small primary" type="button">Duplicate for Another Crop / Variety</button><button id="g-delset" class="small danger" type="button" hidden>Delete This Crop / Variety</button></div>
         <p class="small muted" style="margin-top:0">The same plot numbers can be used again in each crop / variety – duplicate the randomization and change what differs.</p>
         <details style="margin-top:8px"><summary>Faster: paste the current tab</summary>
           <p class="small muted">One line per row, row 1 (the bottom row) first. Spaces, commas and tabs all work. On the Treatment tab use 0 for a buffer.</p>
           <textarea id="c-paste" placeholder="101 102 103 104&#10;201 202 203 204"></textarea>
-          <div class="actions"><button id="c-paste-go" class="small" type="button">Apply to this tab</button></div>
+          <div class="actions"><button id="c-paste-go" class="small" type="button">Apply to This Tab</button></div>
         </details>
       </div>
     </section>
@@ -829,8 +936,8 @@ function viewTrialForm(trial) {
     <div class="actions">
       <button id="w-back" type="button">← Back</button>
       <button id="w-next" class="primary" type="button">Next →</button>
-      <button id="save" class="primary">${editing ? 'Save changes' : 'Create trial'}</button>
-      <a class="btn" id="w-cancel" href="${editing ? '#/trial/' + d.id : '#/'}">Cancel</a>
+      <button id="save" class="primary">${editing ? 'Save Changes' : 'Create Trial'}</button>
+      <button id="w-cancel" type="button">${editing ? 'Discard Changes' : 'Discard'}</button>
     </div>
     ${editing ? '' : `<p class="small muted">After creating the trial you open it, add an assessment date, then start assessing.</p>`}
   </main>`;
@@ -851,7 +958,7 @@ function viewTrialForm(trial) {
   const custom = () => d.randType === 'custom';
 
   /* ---- custom randomization: a grid of plots (across x up), one grid per crop / variety ---- */
-  let layer = 'plot', cur = 0; // layer = the tab being filled in: plot / rep / trt
+  let layer = (draft && draft.data.ui && draft.data.ui.layer) || 'plot', cur = (draft && draft.data.ui && draft.data.ui.cur) || 0; // layer = the tab being filled in: plot / rep / trt
   const G = () => d.sets[cur].grid;
   const isInt = v => v !== '' && v != null && Number.isInteger(Number(v));
   const autoPlot = (row, col, across) => d.numbering === 'seq' ? (row - 1) * across + col : row * (across > 99 ? 1000 : 100) + col; // row 1 is the bottom row
@@ -910,7 +1017,7 @@ function viewTrialForm(trial) {
   function validateGrid() {
     const g = G(), st = statusOf(g);
     $('g-grid').querySelectorAll('input[data-r]').forEach(inp => { const r = +inp.dataset.r, c = +inp.dataset.c; inp.classList.toggle('err', cellErr(g, g.cells[r][c], r, c)[layer]); });
-    $('g-tabs').querySelectorAll('button').forEach(b => { const n = st.errCount[b.dataset.l]; b.classList.toggle('on', b.dataset.l === layer); b.textContent = { plot: 'Plot no.', rep: 'Rep', trt: 'Treatment' }[b.dataset.l] + (n ? ` ⚠${n}` : ''); });
+    $('g-tabs').querySelectorAll('button').forEach(b => { const n = st.errCount[b.dataset.l]; b.classList.toggle('on', b.dataset.l === layer); b.textContent = { plot: 'Plot No.', rep: 'Rep', trt: 'Treatment' }[b.dataset.l] + (n ? ` ⚠${n}` : ''); });
     $('rep-legend').innerHTML = st.reps.map(rp => `<span class="rl ${repClass(rp)}">Rep ${rp}</span>`).join('');
     $('c-status').innerHTML = `<b>${st.total - st.bufs}</b> plot${st.total - st.bufs === 1 ? '' : 's'} · <b>${st.bufs}</b> buffer · <b>${st.reps.length}</b> rep${st.reps.length === 1 ? '' : 's'} worked out`
       + (st.bad ? ` · <span class="rep-bad">some boxes need filling in (red / ⚠ on the tabs)</span>` : st.warn.length ? `<br><span class="muted">Note: ${esc(st.warn.slice(0, 6).join('; '))}${st.warn.length > 6 ? ` … and ${st.warn.length - 6} more` : ''}</span>` : ' · <span class="rep-ok">✓</span>');
@@ -964,13 +1071,21 @@ function viewTrialForm(trial) {
 
   function drawNames() {
     if (d.untreated > d.trts) d.untreated = 0;
+    const L = appLetters(d);
     $('trt-names').innerHTML = range(d.trts).map(k => `
-      <div class="trt-row"><label class="field" style="margin:0"><span>Trt ${k}</span><input data-k="${k}" value="${esc(d.trtNames[k - 1] || '')}" placeholder="${k === 1 ? 'e.g. Untreated check' : ''}"></label>
-        <label class="chk"><input type="checkbox" data-u="${k}" ${d.untreated === k ? 'checked' : ''}> Untreated</label></div>`).join('');
+      <div class="trt-block"><div class="trt-row"><label class="field" style="margin:0"><span>Trt ${k}</span><input data-k="${k}" value="${esc(d.trtNames[k - 1] || '')}" placeholder="${k === 1 ? 'e.g. Untreated check' : ''}"></label>
+        <label class="chk"><input type="checkbox" data-u="${k}" ${d.untreated === k ? 'checked' : ''}> Untreated</label></div>
+        ${L.length && d.untreated !== k ? `<div class="trt-apps"><span class="lbl">Applications</span>${L.map(l => `<button type="button" class="chip ${(d.trtApps[k - 1] || []).includes(l) ? 'on' : ''}" data-ta="${k}" data-l="${l}">${l}</button>`).join('')}</div>` : ''}</div>`).join('');
+    $('trt-names').querySelectorAll('[data-ta]').forEach(b => b.onclick = () => {
+      const k = +b.dataset.ta, l = b.dataset.l, cur2 = d.trtApps[k - 1] || [];
+      d.trtApps[k - 1] = cur2.includes(l) ? cur2.filter(x => x !== l) : [...cur2, l].sort();
+      b.classList.toggle('on', d.trtApps[k - 1].includes(l));
+    });
     $('trt-names').querySelectorAll('input[data-k]').forEach(inp => inp.oninput = () => { d.trtNames[inp.dataset.k - 1] = inp.value; });
     $('trt-names').querySelectorAll('input[data-u]').forEach(cb => cb.onchange = () => {
       d.untreated = cb.checked ? +cb.dataset.u : 0;
-      $('trt-names').querySelectorAll('input[data-u]').forEach(o => { o.checked = +o.dataset.u === d.untreated; });
+      if (d.untreated) d.trtApps[d.untreated - 1] = []; // the untreated check receives no applications
+      drawNames();
       d.layout.forEach((_, r) => updateRow(r));
     });
   }
@@ -1044,6 +1159,7 @@ function viewTrialForm(trial) {
   $('f-id').oninput = e => { const el = e.target, pos = el.selectionStart; el.value = el.value.toUpperCase(); try { el.setSelectionRange(pos, pos); } catch (err) {} };
   $('f-reps').onchange = resize; $('f-trts').onchange = resize;
   $('f-num').onchange = () => { d.numbering = $('f-num').value; drawRand(); };
+  $('f-apps').oninput = () => { d.apps = clamp(parseInt($('f-apps').value, 10) || 0, 0, 26); const L = appLetters(d); d.trtApps = d.trtApps.map(a => (a || []).filter(l => L.includes(l))); drawNames(); };
   $('f-rtype').onchange = () => { d.randType = $('f-rtype').value; applyMode(); };
   $('g-tabs').querySelectorAll('button').forEach(b => b.onclick = () => { layer = b.dataset.l; drawGrid(); });
   const resizeGrid = () => {
@@ -1058,7 +1174,7 @@ function viewTrialForm(trial) {
   $('g-autoplot').onclick = () => { const g = G(); g.cells.forEach((row, r) => row.forEach((cell, c) => { cell.plot = autoPlot(r + 1, c + 1, g.across); })); autoReps(g); layer = 'plot'; drawGrid(); toast('Plot numbers filled in'); };
   $('g-autorep').onclick = () => { const g = G(); g.cells.forEach(row => row.forEach(cell => { cell.repManual = false; })); autoReps(g); layer = 'rep'; drawGrid(); toast('Reps worked out again from the treatments'); };
   $('g-clear').onclick = () => {
-    if (!confirm(`Clear everything on the ${{ plot: 'Plot no.', rep: 'Rep', trt: 'Treatment' }[layer]} tab?`)) return;
+    if (!confirm(`Clear everything on the ${{ plot: 'Plot No.', rep: 'Rep', trt: 'Treatment' }[layer]} tab?`)) return;
     const g = G(); g.cells.forEach(row => row.forEach(cell => { if (layer === 'trt') { cell.trt = ''; cell.buf = false; } else if (layer === 'rep') { cell.rep = ''; cell.repManual = false; } else cell.plot = ''; })); autoReps(g); drawGrid();
   };
   $('g-dup').onclick = () => { // same plot numbers again for another crop / variety
@@ -1114,6 +1230,12 @@ function viewTrialForm(trial) {
     d.crop = $('f-crop').value === '__other' ? $('f-crop-other').value.trim() : $('f-crop').value;
     if (!d.trialId) { alert('Please enter a Trial ID.'); $('f-id').focus(); return; }
     if (db.trials.some(t => t.id !== d.id && t.trialId.toLowerCase() === d.trialId.toLowerCase()) && !confirm(`A trial called "${d.trialId}" already exists. Save anyway?`)) return;
+    const L = appLetters(d);
+    d.trtApps = range(d.trts).map(k => Number(d.untreated) === k ? [] : (d.trtApps[k - 1] || []).filter(l => L.includes(l)).sort());
+    if (L.length) {
+      const none = range(d.trts).filter(k => Number(d.untreated) !== k && !d.trtApps[k - 1].length);
+      if (none.length && !confirm(`Treatment${none.length > 1 ? 's' : ''} ${none.join(', ')} ${none.length > 1 ? 'have' : 'has'} no application ticked.\n\nSave anyway?`)) { showStep(2); return; }
+    }
     if (custom()) {
       d.sets.forEach(x => { if (!x.grid) x.grid = gridFromList(d.sets.indexOf(x)); });
       const sts = d.sets.map(x => statusOf(x.grid));
@@ -1144,6 +1266,7 @@ function viewTrialForm(trial) {
     d.updated = Date.now();
     const i = db.trials.findIndex(t => t.id === d.id);
     if (i >= 0) db.trials[i] = d; else db.trials.push(d);
+    finished = true; dropDraft(key);
     save(); toast(editing ? 'Trial saved' : 'Trial created');
     go('#/trial/' + d.id);
   };
@@ -1156,103 +1279,119 @@ function viewTrialForm(trial) {
   app.querySelectorAll('.step').forEach(b => b.onclick = () => goStep(+b.dataset.st));
   $('w-next').onclick = () => goStep(step + 1);
   $('w-back').onclick = () => goStep(step - 1);
-  drawNames(); drawRand(); applyMode(); showStep(1);
-  if (!editing) $('f-id').focus();
+  /* drafts: the form is saved at every input or tap, with the step you were on */
+  let finished = false;
+  const collect = () => { d.trialId = $('f-id').value.trim().toUpperCase(); d.desc = $('f-desc').value; d.type = $('f-type').value; d.crop = $('f-crop').value === '__other' ? $('f-crop-other').value.trim() : $('f-crop').value; };
+  const snap = () => {
+    if (finished || !$('f-id')) return null; // the form is already gone
+    collect(); if (!editing && !d.trialId && !d.desc.trim()) return null; // nothing worth keeping yet
+    const { assessments, ...rest } = d;
+    return { data: { d: JSON.parse(JSON.stringify(rest)), ui: { cur, layer } }, step };
+  };
+  ['input', 'change', 'click'].forEach(ev => app.querySelector('main').addEventListener(ev, e => { if (!finished && !(e.target.closest && e.target.closest('#w-cancel'))) queueDraft(key, snap); }));
+  $('w-cancel').onclick = () => {
+    const dirty = !!getDraft(key) || (draftPending && draftPending.key === key);
+    if (dirty && !confirm(editing ? 'Discard your changes to this trial?' : 'Discard this unfinished trial? Everything you entered will be lost.')) return;
+    finished = true; dropDraft(key); go(editing ? '#/trial/' + d.id : '#/');
+  };
+  drawNames(); drawRand(); applyMode(); showStep(draft && draft.step ? draft.step : 1);
+  if (!editing && !draft) $('f-id').focus();
 }
 
 /* ---------- TRIAL DETAIL ---------- */
 function viewTrial(t) {
-  const n = plotCount(t);
   const as = [...t.assessments].sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.created - a.created);
+  const trDraft = getDraft('trial:' + t.id), newDraft = getDraft(`assess:${t.id}:new`);
   app.innerHTML = `
   <header class="top"><a class="back" href="#/">← Trials</a><h1>${esc(t.trialId)}</h1><a class="brand sm" href="#/" aria-label="FART – back to the home page"><b>FART</b><span>Field Assessment Recording Tool</span></a></header>
   <main>
     ${t.desc ? `<p class="muted">${esc(t.desc)}</p>` : ''}
     ${(t.type || t.crop || t.archived) ? `<div class="pills" style="margin:0 0 .5rem">${t.archived ? '<span class="pill warn">Archived</span>' : ''}${t.type ? `<span class="pill">${esc(t.type)}</span>` : ''}${t.crop ? `<span class="pill">${esc(t.crop)}</span>` : ''}</div>` : ''}
-    <p class="small muted">${t.reps} reps × ${t.trts} treatments · ${n} plots · ${t.serpentine ? 'serpentine walk' : 'walk in plot order'}</p>
+    <p class="small muted">${trialLine(t)} · ${t.serpentine ? 'Serpentine Walk' : 'Walk in Plot Order'}</p>
+    ${trDraft ? `<div class="card draftcard"><h3>Unsaved Changes to This Trial</h3><div class="small">Saved ${savedAgo(trDraft.saved)}</div>
+      <div class="actions" style="margin:10px 0 0"><a class="btn primary small" href="#/trial/${t.id}/edit">Continue</a><button class="small" id="dr-trial-x" type="button">Discard</button></div></div>` : ''}
+    ${newDraft ? `<div class="card draftcard"><h3>Unfinished Assessment Date</h3><div class="small">${esc(newDraft.data.dateTxt || dmy(newDraft.data.d.date))} · Saved ${savedAgo(newDraft.saved)}</div>
+      <div class="actions" style="margin:10px 0 0"><a class="btn primary small" href="#/trial/${t.id}/a/new">Continue</a><button class="small" id="dr-assess-x" type="button">Discard</button></div></div>` : ''}
     <div class="actions">
-      <a class="btn primary" href="#/trial/${t.id}/a/new">+ New assessment date</a>
-      <button id="xl" ${t.assessments.length ? '' : 'disabled'}>Export all…</button>
-      <button id="share">Share trial</button>
-      <label class="btn">Import assessment<input type="file" class="import-assess" accept=".json,application/json" hidden></label>
-      <a class="btn" href="#/trial/${t.id}/edit">Edit trial</a>
-      <button id="arch">${t.archived ? 'Unarchive' : 'Archive trial'}</button>
-      <button id="del" class="danger">Delete trial</button>
+      <a class="btn primary" href="#/trial/${t.id}/a/new">+ New Assessment Date</a>
+      <button id="xl" ${t.assessments.length ? '' : 'disabled'}>Export All…</button>
+      <button id="share">Share Trial</button>
+      <label class="btn">Import Assessment<input type="file" class="import-assess" accept=".json,application/json" hidden></label>
+      <a class="btn" href="#/trial/${t.id}/edit">Edit Trial</a>
+      <button id="arch">${t.archived ? 'Unarchive' : 'Archive Trial'}</button>
     </div>
 
-    <h2 style="margin:20px 0 4px">Assessment dates</h2>
+    <h2 style="margin:20px 0 4px">Assessment Dates</h2>
     <p class="small muted" style="margin-bottom:12px">Add a date, describe the assessments for it, then start assessing.</p>
     ${as.length ? as.map(a => {
-      const done = countDone(t, a);
-      const miss = a.types.length ? visitMissing(t, a) : 0, started = a.types.length > 0 && (done > 0 || plots(t).some(p => plotStarted(a, p.plot)));
-      const status = !a.types.length ? ['No assessments yet', '', 'new'] : miss === 0 ? ['✓ Complete', 'ok', 'complete'] : started ? ['In progress', '', 'part'] : ['Not started', '', 'new'];
+      const n = nPlots(t, a), done = countDone(t, a);
+      const miss = a.types.length ? visitMissing(t, a) : 0, started = a.types.length > 0 && (done > 0 || scopedPlots(t, a).some(p => plotStarted(a, p.plot)));
+      const status = !a.types.length ? ['No Assessments Yet', '', 'new'] : miss === 0 ? ['✓ Complete', 'ok', 'complete'] : started ? ['In Progress', '', 'part'] : ['Not Started', '', 'new'];
+      const canLock = a.locked || (a.types.length && miss === 0), unsaved = getDraft(`assess:${t.id}:${a.id}`);
       return `<section class="card visit ${status[2]}">
         <div class="vhead">
           <div><div class="vdate">${esc(dmy(a.date))}</div>
             <div class="small muted">${[a.assessor, a.cropBBCH ? `BBCH ${a.cropBBCH}${(a.cropBBCHMin || a.cropBBCHMax) ? ` (${a.cropBBCHMin || '–'}–${a.cropBBCHMax || '–'})` : ''}` : ''].filter(Boolean).map(esc).join(' · ')}</div></div>
-          <span style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">${a.locked ? '<span class="pill">🔒 Locked</span>' : ''}<span class="pill ${status[1]}">${status[0]}</span></span>
+          <span style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;align-items:center"><span class="pill ${status[1]}">${status[0]}</span>${canLock ? `<button class="ibtn" data-${a.locked ? 'unlock' : 'lock'}="${a.id}" title="${a.locked ? 'Locked – tap to unlock' : 'Lock this date'}" aria-label="${a.locked ? 'Unlock this date' : 'Lock this date'}" type="button">${a.locked ? ICON.lock : ICON.unlock}</button>` : ''}</span>
         </div>
-        ${a.types.length ? `<div class="bar"><div style="width:${done / n * 100}%"></div></div>
-          <div class="small muted">${done} of ${n} plots complete${miss ? ` · ${miss} value${miss === 1 ? '' : 's'} still to enter` : ''}</div>
-          <details class="vlist"><summary>${a.types.length} assessment${a.types.length === 1 ? '' : 's'}</summary>
+        ${(appLetters(t).length || unsaved) ? `<div class="pills" style="margin:0 0 .5rem">${appLetters(t).length ? `<span class="pill">${esc(scopeText(t, a))}</span>` : ''}${unsaved ? '<span class="pill warn">Unsaved Changes</span>' : ''}</div>` : ''}
+        ${a.types.length ? `<div class="bar"><div style="width:${n ? done / n * 100 : 0}%"></div></div>
+          <div class="small muted">${done} of ${n} Plots Complete${miss ? ` · ${miss} Value${miss === 1 ? '' : 's'} Still to Enter` : ''}</div>
+          <details class="vlist"><summary>${a.types.length} Assessment${a.types.length === 1 ? '' : 's'}</summary>
             <ol>${a.types.map(ty => `<li>${esc(typeLabel(ty))}</li>`).join('')}</ol></details>` : ''}
         <div class="actions" style="margin:12px 0 0">
-          <a class="btn primary" href="#/trial/${t.id}/a/${a.id}">${!a.types.length ? 'Add assessments' : miss === 0 ? 'Open' : started ? 'Continue' : 'Start assessing'}</a>
+          <a class="btn primary" href="#/trial/${t.id}/a/${a.id}${a.types.length && miss === 0 ? '/review' : ''}">${!a.types.length ? 'Add Assessments' : miss === 0 ? 'Open' : started ? 'Continue' : 'Start Assessing'}</a>
           <a class="btn" href="#/trial/${t.id}/a/${a.id}/review">Review</a>
           <button data-xp="${a.id}">Export</button>
           <button data-sh="${a.id}">Share</button>
-          ${a.locked ? `<button data-unlock="${a.id}">Unlock</button>` : `${a.types.length && miss === 0 ? `<button data-lock="${a.id}">Lock</button>` : ''}<a class="btn" href="#/trial/${t.id}/a/${a.id}/edit">Edit</a>
-          <button class="danger" data-del="${a.id}">Delete</button>`}
+          ${a.locked ? '' : `<a class="btn" href="#/trial/${t.id}/a/${a.id}/edit">Edit</a>`}
         </div>
+        ${a.locked ? '' : `<div class="vfoot"><button class="ibtn danger" data-del="${a.id}" title="Delete this date" aria-label="Delete this date" type="button">${ICON.trash}</button></div>`}
       </section>`;
-    }).join('') : `<div class="card empty"><p>No assessment dates yet.</p><a class="btn primary" href="#/trial/${t.id}/a/new">+ New assessment date</a></div>`}
+    }).join('') : `<div class="card empty"><p>No assessment dates yet.</p><a class="btn primary" href="#/trial/${t.id}/a/new">+ New Assessment Date</a></div>`}
 
     <section class="card">
-      <h2>Field layout</h2>
+      <h2>Field Layout</h2>
       <p class="small muted">Plot number and treatment for each plot.${t.untreated ? ' <span class="pill" style="background:var(--utc-bg);color:var(--ink)">Untreated = Darker</span>' : ''}</p>
       ${layoutSets(t).slice().reverse().map(st => `${st.name ? `<div class="setname">${esc(st.name)}</div>` : ''}<div class="scroll"><table class="map"><tbody>
         ${st.rows.map(row => `<tr>${row.label ? `<th class="l">${row.label}</th>` : ''}${row.cells.map(c => c.trt ? `<td><span class="pc ${c.trt === t.untreated ? 'utc' : ''} ${isCustom(t) ? repClass(c.rep) : ''}"><b>${c.plot}</b><span>T${c.trt}${isCustom(t) ? '' : (c.trt === t.untreated ? ' · UTC' : '')}</span></span></td>` : `<td><span class="pc buf"><b>${c.plot}</b><span>Buffer</span></span></td>`).join('')}</tr>`).reverse().join('')}
       </tbody></table></div>${isCustom(t) ? `<div class="replegend">${[...new Set(st.rows.flatMap(r => r.cells.filter(c => c.trt).map(c => c.rep)))].sort((x, y) => x - y).map(rp => `<span class="rl ${repClass(rp)}">Rep ${rp}</span>`).join('')}</div>` : ''}`).join('')}
-      ${t.trtNames.some(Boolean) ? `<p class="small" style="margin-top:12px">${range(t.trts).map(k => `<b>T${k}</b> ${esc(trtName(t, k) || '—')}${k === t.untreated ? ' (UTC)' : ''}`).join(' · ')}</p>` : ''}
+      ${(t.trtNames.some(Boolean) || appLetters(t).length) ? `<p class="small" style="margin-top:12px">${range(t.trts).map(k => `<b>T${k}</b> ${esc(trtName(t, k) || '—')}${k === t.untreated ? ' (UTC)' : ''}${appLetters(t).length && k !== t.untreated ? ` <span class="muted">[${esc(trtApps(t, k).join(', ') || 'No Application')}]</span>` : ''}`).join(' · ')}</p>` : ''}
     </section>
     <div class="card subtle" style="padding:12px;margin:16px 0 0">
-      ${db.sections.length ? `<label class="field" style="margin:0;max-width:340px"><span>Home page section</span><select id="sec-sel">${secOpts(t.section)}</select></label>
+      ${db.sections.length ? `<label class="field" style="margin:0;max-width:340px"><span>Home Page Section</span><select id="sec-sel">${secOpts(t.section)}</select></label>
         <p class="small muted" style="margin:.4rem 0 0">Only decides where this trial is listed on the home page. It doesn't change the trial or its data.</p>`
-      : `<p class="small muted" style="margin:0"><b>Home page section:</b> none yet. Sections are created on the home page and only group the trial list there.</p>`}
+      : `<p class="small muted" style="margin:0"><b>Home Page Section:</b> none yet. Sections are created on the home page and only group the trial list there.</p>`}
     </div>
+    <button id="del" class="dangerzone" type="button">Delete Trial</button>
   </main>`;
   document.getElementById('xl').onclick = () => openExport(t, null);
   document.getElementById('share').onclick = () => shareTrial(t);
+  const x1 = document.getElementById('dr-trial-x'); if (x1) x1.onclick = () => { if (confirm('Discard your unsaved changes to this trial?')) { dropDraft('trial:' + t.id); viewTrial(t); } };
+  const x2 = document.getElementById('dr-assess-x'); if (x2) x2.onclick = () => { if (confirm('Discard this unfinished assessment date?')) { dropDraft(`assess:${t.id}:new`); viewTrial(t); } };
   app.querySelectorAll('input.import-assess').forEach(inp => inp.onchange = async e => {
     const f = e.target.files[0]; e.target.value = ''; if (!f) return;
     try { const d = JSON.parse(await f.text()); if (importAssessment(d, t)) viewTrial(t); } catch (err) { alert('That file is not a shared FART assessment.'); }
   });
   app.querySelectorAll('[data-sh]').forEach(b => b.onclick = () => shareAssessment(t, t.assessments.find(x => x.id === b.dataset.sh)));
-  app.querySelectorAll('[data-lock]').forEach(b => b.onclick = () => {
-    if (!confirm('Lock this date? Values cannot be changed until you unlock it.')) return;
-    t.assessments.find(x => x.id === b.dataset.lock).locked = Date.now(); t.updated = Date.now(); save(); viewTrial(t);
-  });
-  app.querySelectorAll('[data-unlock]').forEach(b => b.onclick = () => {
-    if (!confirm('Unlock this date so values can be edited?')) return;
-    delete t.assessments.find(x => x.id === b.dataset.unlock).locked; t.updated = Date.now(); save(); viewTrial(t);
-  });
+  app.querySelectorAll('[data-lock],[data-unlock]').forEach(b => b.onclick = () => toggleLock(t, t.assessments.find(x => x.id === (b.dataset.lock || b.dataset.unlock)), () => viewTrial(t)));
   app.querySelectorAll('[data-xp]').forEach(b => b.onclick = () => openExport(t, t.assessments.find(x => x.id === b.dataset.xp)));
   const secSel = document.getElementById('sec-sel');
   if (secSel) secSel.onchange = () => { if (secSel.value) t.section = secSel.value; else delete t.section; save(); toast('Home page section updated'); };
   document.getElementById('arch').onclick = () => {
     if (t.archived) { delete t.archived; t.updated = Date.now(); save(); toast('Trial unarchived'); viewTrial(t); return; }
-    const open = t.assessments.filter(a => !a.types.length || countDone(t, a) < plotCount(t)).length;
-    if (!confirm(`Archive ${t.trialId}?${open ? `\n\n${open} assessment date${open > 1 ? 's are' : ' is'} not finished yet.` : ''}\n\nIt moves to "Archived trials" on the home screen. Nothing is deleted and you can unarchive it any time.`)) return;
+    const open = t.assessments.filter(a => !a.types.length || countDone(t, a) < nPlots(t, a)).length;
+    if (!confirm(`Archive ${t.trialId}?${open ? `\n\n${open} assessment date${open > 1 ? 's are' : ' is'} not finished yet.` : ''}\n\nIt moves to "Archived Trials" on the home screen. Nothing is deleted and you can unarchive it any time.`)) return;
     t.archived = Date.now(); save(); toast('Trial archived'); go('#/');
   };
   document.getElementById('del').onclick = () => {
     if (!confirm(`Delete trial "${t.trialId}" and all of its assessment data? This cannot be undone.`)) return;
-    db.trials = db.trials.filter(x => x.id !== t.id); save(); go('#/');
+    dropTrialDrafts(t.id); db.trials = db.trials.filter(x => x.id !== t.id); save(); go('#/');
   };
   app.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
     const a = t.assessments.find(x => x.id === b.dataset.del);
     if (!confirm(`Delete the ${dmy(a.date)} assessment and its data?`)) return;
-    t.assessments = t.assessments.filter(x => x.id !== a.id); t.updated = Date.now(); save(); viewTrial(t);
+    dropDraft(`assess:${t.id}:${a.id}`); t.assessments = t.assessments.filter(x => x.id !== a.id); t.updated = Date.now(); save(); viewTrial(t);
   });
 }
 
@@ -1260,25 +1399,29 @@ function viewTrial(t) {
 const STAGE_FIELDS = ['stage', 'stageMin', 'stageMax', 'sizeH', 'sizeW', 'sizeUnit', 'stageOther'];
 function pestCodeBox(ty, i) { // fungicide pests: pick Mixed / LESVIS / PYCVIS / PUSVIS, or type another
   const other = ty.stageOther || (ty.stage && !PEST_CODES.includes(ty.stage));
-  return `<div class="stagebox"><b class="small">Pest stage</b>
+  return `<div class="stagebox"><b class="small">Pest Stage</b>
     <label class="field" style="margin-top:6px"><span>Stage *</span><select data-pp="${i}"><option value="">— Select —</option>${PEST_CODES.map(c => `<option ${!other && ty.stage === c ? 'selected' : ''}>${c}</option>`).join('')}<option value="__other" ${other ? 'selected' : ''}>Other (type it in)…</option></select></label>
-    ${other ? `<label class="field"><span>Type the stage</span><input data-i="${i}" data-f="stage" value="${esc(ty.stage || '')}" autocomplete="off" autocapitalize="characters"></label>` : ''}</div>`;
+    ${other ? `<label class="field"><span>Type the Stage</span><input data-i="${i}" data-f="stage" value="${esc(ty.stage || '')}" autocomplete="off" autocapitalize="characters"></label>` : ''}</div>`;
 }
 function viewAssessForm(t, a, startStep) {
   const editing = !!a;
+  const key = `assess:${t.id}:${editing ? a.id : 'new'}`, draft = getDraft(key); // saved at every step; reopening carries on where you were
   const d = editing ? JSON.parse(JSON.stringify(a)) : {
-    id: uid(), date: today(), assessor: db.settings.assessor || '', cropBBCH: '', cropBBCHMin: '', cropBBCHMax: '', notes: '', types: [], data: {}, created: Date.now()
+    id: uid(), date: today(), assessor: db.settings.assessor || '', cropBBCH: '', cropBBCHMin: '', cropBBCHMax: '', notes: '', types: [], data: {}, created: Date.now(), apps: null, appsUntreated: true
   };
+  if (draft) { Object.assign(d, JSON.parse(JSON.stringify(draft.data.d))); d.data = editing ? JSON.parse(JSON.stringify(a.data)) : {}; }
+  if (!Array.isArray(d.apps)) d.apps = null;
+  if (d.appsUntreated === undefined) d.appsUntreated = true;
   // a new date starts blank – earlier dates in this trial can be looked at (and copied from) under "Previous assessments"
   const prevAs = t.assessments.filter(x => x.id !== d.id && x.types.length).sort((x, y) => (y.date || '').localeCompare(x.date || '') || y.created - x.created);
   const back = `#/trial/${t.id}`;
-  let step = startStep || 1;
+  let step = startStep || (draft && draft.step) || 1;
 
   app.innerHTML = `
-  <header class="top"><a class="back" href="${back}">← ${esc(t.trialId)}</a><h1>${editing ? 'Edit assessment date' : 'New assessment date'}</h1><a class="brand sm" href="#/" aria-label="FART – back to the home page"><b>FART</b><span>Field Assessment Recording Tool</span></a></header>
+  <header class="top"><a class="back" href="${back}">← ${esc(t.trialId)}</a><h1>${editing ? 'Edit Assessment Date' : 'New Assessment Date'}</h1><a class="brand sm" href="#/" aria-label="FART – back to the home page"><b>FART</b><span>Field Assessment Recording Tool</span></a></header>
   <main>
     <div class="steps">
-      <button class="step" data-st="1" type="button"><b>1</b> Date &amp; crop stage</button>
+      <button class="step" data-st="1" type="button"><b>1</b> Date &amp; Crop Stage</button>
       <button class="step" data-st="2" type="button"><b>2</b> Assessments</button>
     </div>
 
@@ -1286,31 +1429,38 @@ function viewAssessForm(t, a, startStep) {
       <section class="card">
         <h2>Date</h2>
         <div class="grid2">
-          <label class="field"><span>Date * <span class="muted" style="font-weight:400">(DD/MM/YYYY)</span></span><span class="datewrap"><input id="a-date" inputmode="numeric" maxlength="10" placeholder="DD/MM/YYYY" value="${esc(dmy(d.date))}" autocomplete="off" readonly><button type="button" id="a-cal" class="calbtn" aria-label="Open calendar"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/></svg></button></span></label>
+          <label class="field"><span>Date * <span class="muted" style="font-weight:400">(DD/MM/YYYY)</span></span><span class="datewrap"><input id="a-date" inputmode="numeric" maxlength="10" placeholder="DD/MM/YYYY" value="${esc(draft && draft.data.dateTxt != null ? draft.data.dateTxt : dmy(d.date))}" autocomplete="off" readonly><button type="button" id="a-cal" class="calbtn" aria-label="Open calendar"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/></svg></button></span></label>
           <label class="field"><span>Assessor</span><input id="a-who" value="${esc(d.assessor)}" placeholder="Initials or name" autocapitalize="characters" autocomplete="off" style="text-transform:uppercase"></label>
         </div>
-        <h3>Crop growth stage (BBCH)</h3>
+        <h3>Crop Growth Stage (BBCH)</h3>
         <div class="grid3">
           <label class="field"><span>Majority *</span><input id="a-bbch" inputmode="numeric" value="${esc(d.cropBBCH || '')}" placeholder="e.g. 32" autocomplete="off"></label>
           <label class="field"><span>Minimum</span><input id="a-bbch-min" inputmode="numeric" value="${esc(d.cropBBCHMin || '')}" autocomplete="off"></label>
           <label class="field"><span>Maximum</span><input id="a-bbch-max" inputmode="numeric" value="${esc(d.cropBBCHMax || '')}" autocomplete="off"></label>
         </div>
-        <label class="field" style="margin-bottom:0"><span>Notes</span><input id="a-notes" value="${esc(d.notes)}" placeholder="Weather, conditions…"></label>
+        <label class="field"><span>Notes</span><input id="a-notes" value="${esc(d.notes)}" placeholder="Weather, conditions…"></label>
+        <div id="ap-block" ${appLetters(t).length ? '' : 'hidden'}>
+          <h3 class="h3s">Plots to Assess</h3>
+          <div class="seg mini"><button type="button" id="ap-all">All Applications</button><button type="button" id="ap-sel">Choose Applications</button></div>
+          <div id="ap-chips" class="appchips" hidden></div>
+          <label class="chk" id="ap-utc-wrap" hidden><input type="checkbox" id="ap-utc"> Include Untreated Plots (Trt ${t.untreated || ''})</label>
+          <p class="small muted" id="ap-info" style="margin:.4rem 0 0"></p>
+        </div>
       </section>
     </div>
 
     <div data-step="2" hidden>
       <section class="card">
-        <h2>Describe an assessment</h2>
-        <p class="small muted">Choose what you are assessing, then tap <b>+ Add assessment</b>. It is added to this date's list below.</p>
-        <label class="field"><span>Assessment menu</span><select id="a-menu"></select></label>
+        <h2>Describe an Assessment</h2>
+        <p class="small muted">Choose what you are assessing, then tap <b>+ Add Assessment</b>. It is added to this date's list below.</p>
+        <label class="field"><span>Assessment Menu</span><select id="a-menu"></select></label>
         <div id="sel-hint" class="small muted" style="margin-bottom:6px">Tap to select (you can select several):</div>
         <div id="menu-items" class="chips" style="margin-bottom:14px"></div>
         <div id="bld"></div>
         <div id="custom-box" hidden>
           <p class="small muted">Build an assessment of your own, with your own name, unit and range.</p>
           <label class="field"><span>Name *</span><input id="c-name" placeholder="e.g. Tiller number" autocomplete="off"></label>
-          <label class="field"><span>Assessment type <span class="muted" style="font-weight:400">(type anything)</span></span><input id="c-type" list="atype-list" placeholder="e.g. Count, Score, Cover, Height" autocomplete="off">
+          <label class="field"><span>Assessment Type <span class="muted" style="font-weight:400">(type anything)</span></span><input id="c-type" list="atype-list" placeholder="e.g. Count, Score, Cover, Height" autocomplete="off">
             <datalist id="atype-list"><option>Count</option><option>Score</option><option>Cover</option><option>Height</option><option>Damage</option><option>Efficacy</option><option>Yield</option><option>Quality</option></datalist></label>
           <div class="grid3">
             <label class="field"><span>Unit</span><input id="c-unit" placeholder="%, cm, 0–9" autocomplete="off"></label>
@@ -1318,17 +1468,17 @@ function viewAssessForm(t, a, startStep) {
             <label class="field"><span>Max</span><input id="c-max" inputmode="decimal" autocomplete="off"></label>
           </div>
           <div class="grid2">
-            <label class="field"><span>Subsamples per plot</span><input id="c-subs" inputmode="numeric" value="1" autocomplete="off"></label>
-            <label class="chk" style="min-height:44px;align-self:center"><input type="checkbox" id="c-untr"> Untreated plots only</label>
+            <label class="field"><span>Subsamples per Plot</span><input id="c-subs" inputmode="numeric" value="1" autocomplete="off"></label>
+            <label class="chk" style="min-height:44px;align-self:center"><input type="checkbox" id="c-untr"> Untreated Plots Only</label>
           </div>
-          <button id="add-custom" class="primary" type="button" style="width:100%">+ Add custom assessment</button>
+          <button id="add-custom" class="primary" type="button" style="width:100%">+ Add Custom Assessment</button>
         </div>
         <div id="std-add">
           <div class="grid2">
-            <label class="field"><span>Subsamples per plot</span><input id="b-subs" inputmode="numeric" value="1" autocomplete="off"></label>
-            <label class="chk" style="min-height:44px;align-self:center"><input type="checkbox" id="b-untr"> Untreated plots only</label>
+            <label class="field"><span>Subsamples per Plot</span><input id="b-subs" inputmode="numeric" value="1" autocomplete="off"></label>
+            <label class="chk" style="min-height:44px;align-self:center"><input type="checkbox" id="b-untr"> Untreated Plots Only</label>
           </div>
-          <button id="add-assess" class="primary" type="button" style="width:100%">+ Add assessment</button>
+          <button id="add-assess" class="primary" type="button" style="width:100%">+ Add Assessment</button>
         </div>
       </section>
 
@@ -1336,24 +1486,39 @@ function viewAssessForm(t, a, startStep) {
         <h2>Added Assessments</h2>
         <div id="sum" class="sumline"></div>
         <div id="types"></div>
-        ${prevAs.length ? `<details style="margin-top:6px"><summary>Previous assessments in this trial (${prevAs.length} date${prevAs.length === 1 ? '' : 's'})</summary>
+        ${prevAs.length ? `<details style="margin-top:6px"><summary>Previous Assessments in This Trial (${prevAs.length} Date${prevAs.length === 1 ? '' : 's'})</summary>
           <p class="small muted" style="margin:6px 0 0">Tap one to add it to this date, or add everything from a date.</p>
-          ${prevAs.map((pa, pi) => `<div style="margin-top:10px"><div class="arow"><b>${esc(dmy(pa.date))}</b><button class="small" data-pall="${pi}" type="button">Add all</button></div>
+          ${prevAs.map((pa, pi) => `<div style="margin-top:10px"><div class="arow"><b>${esc(dmy(pa.date))}</b><button class="small" data-pall="${pi}" type="button">Add All</button></div>
             <div class="chips" style="margin-top:6px">${pa.types.map((ty, ti) => `<button class="chip" data-pt="${pi}.${ti}" type="button">${esc(typeLabel(ty))}</button>`).join('')}</div></div>`).join('')}</details>` : ''}
       </section>
     </div>
 
     <div class="actions">
       <button id="w-back" type="button">← Back</button>
-      <button id="w-next" class="primary" type="button">Next: add assessments →</button>
-      <button id="a-start" class="primary" type="button">Save &amp; start assessing →</button>
-      <button id="a-save" type="button">${editing ? 'Save changes' : 'Save for later'}</button>
-      <a class="btn" id="w-cancel" href="${back}">Cancel</a>
+      <button id="w-next" class="primary" type="button">Next: Add Assessments →</button>
+      <button id="a-start" class="primary" type="button">Save &amp; Start Assessing →</button>
+      <button id="a-save" type="button">${editing ? 'Save Changes' : 'Save for Later'}</button>
+      <button id="w-cancel" type="button">${editing ? 'Discard Changes' : 'Discard'}</button>
     </div>
   </main>`;
 
   const $ = id => document.getElementById(id);
-  const pickDate = () => openCalendar(parseDmy($('a-date').value) || today(), iso => { $('a-date').value = dmy(iso); }, () => { $('a-date').readOnly = false; $('a-date').focus(); });
+  /* which plots this date covers: all applications, or only some */
+  function drawScope() {
+    const L = appLetters(t), sel = !!d.apps;
+    $('ap-all').classList.toggle('on', !sel); $('ap-sel').classList.toggle('on', sel);
+    $('ap-chips').hidden = !sel; $('ap-utc-wrap').hidden = !sel || !t.untreated;
+    $('ap-chips').innerHTML = L.map(l => `<button type="button" class="chip ${sel && d.apps.includes(l) ? 'on' : ''}" data-ap="${l}">${l}</button>`).join('');
+    $('ap-chips').querySelectorAll('[data-ap]').forEach(b => b.onclick = () => { const l = b.dataset.ap; d.apps = d.apps.includes(l) ? d.apps.filter(x => x !== l) : [...d.apps, l].sort(); drawScope(); });
+    $('ap-utc').checked = d.appsUntreated !== false;
+    const n = nPlots(t, d), tot = plots(t).length;
+    $('ap-info').textContent = sel ? `${n} of ${tot} plots will be assessed on this date.${n ? '' : ' Tick at least one application.'}` : `All ${tot} plots will be assessed on this date.`;
+  }
+  $('ap-all').onclick = () => { d.apps = null; drawScope(); };
+  $('ap-sel').onclick = () => { if (!d.apps) d.apps = []; drawScope(); };
+  $('ap-utc').onchange = () => { d.appsUntreated = $('ap-utc').checked; drawScope(); };
+  const watch = () => { if (!finished) queueDraft(key, snap); };
+  const pickDate = () => openCalendar(parseDmy($('a-date').value) || today(), iso => { $('a-date').value = dmy(iso); watch(); }, () => { $('a-date').readOnly = false; $('a-date').focus(); });
   $('a-cal').onclick = pickDate; $('a-date').onclick = () => { if ($('a-date').readOnly) pickDate(); };
   $('a-who').oninput = e => { const el = e.target, pos = el.selectionStart; el.value = el.value.toUpperCase(); try { el.setSelectionRange(pos, pos); } catch (err) {} };
   $('a-date').oninput = e => { // types as DD/MM/YYYY, adding the slashes for you
@@ -1431,14 +1596,14 @@ function viewAssessForm(t, a, startStep) {
     const hasLeaf = m.items.some(it => it.leaf);
     const groups = orderedGroups(m);
     $('bld').innerHTML = `<div class="stagebox" style="padding-bottom:10px">
-      <b>${kind === 'weed' ? 'Weeds' : 'Pests / diseases'}</b>
+      <b>${kind === 'weed' ? 'Weeds' : 'Pests / Diseases'}</b>
       <p class="small muted" style="margin:.2rem 0 .6rem">Needed for the ${kind === 'weed' ? 'weed' : 'pest'} assessments. Choose one or more.</p>
       ${groups.length ? `<label class="field"><span>${kind === 'weed' ? 'Weed' : 'Pest / disease'}</span><select id="b-sel"><option value="">— Select to add —</option>
         ${groups.map(([g, items]) => `<optgroup label="${g}">${items.map(([c, n]) => `<option value="${c}">${c} (${esc(n)})</option>`).join('')}</optgroup>`).join('')}</select></label>` : ''}
       <label class="field"><span>${groups.length ? 'Or type your own' : 'Type a ' + word}</span>
         <span style="display:flex;gap:8px"><input id="b-txt" placeholder="Code or name" autocomplete="off" autocapitalize="characters"><button id="b-add" class="small" type="button">Add</button></span></label>
       <div id="b-picked" class="chips" style="margin-bottom:12px"></div>
-      ${hasLeaf ? `<b class="small">Leaf level(s) or Ear</b><div class="chips" id="b-leaves" style="margin:6px 0 4px">${LEAVES.map(l => `<button class="chip ${leaves.includes(l) ? 'on' : ''}" data-l="${l}" type="button">${l}</button>`).join('')}</div>` : ''}
+      ${hasLeaf ? `<b class="small">Leaf Level(s) or Ear</b><div class="chips" id="b-leaves" style="margin:6px 0 4px">${LEAVES.map(l => `<button class="chip ${leaves.includes(l) ? 'on' : ''}" data-l="${l}" type="button">${l}</button>`).join('')}</div>` : ''}
     </div>`;
     drawPicked();
     if ($('b-sel')) $('b-sel').onchange = () => { addPick($('b-sel').value); $('b-sel').value = ''; };
@@ -1483,18 +1648,18 @@ function viewAssessForm(t, a, startStep) {
     const inp = (f, label, ph) => `<label class="field"><span>${label}</span><input data-i="${i}" data-f="${f}" inputmode="decimal" value="${esc(ty[f] || '')}" placeholder="${ph || ''}" autocomplete="off"></label>`;
     return `<div class="acard">
       <div class="ahead"><span class="anum">${i + 1}</span>
-        <div class="atitle"><b>${esc(ty.name || 'New assessment')}</b>${ty.target ? `<span class="pill">${esc(ty.target)}</span>` : ''}${ty.leaf ? `<span class="pill">${esc(ty.leaf)}</span>` : ''}${ty.atype ? `<span class="pill">${esc(ty.atype)}</span>` : ''}${ty.untreatedOnly ? `<span class="pill warn">Untreated plots only</span>` : ''}${ty.noPhyto ? `<span class="pill">No phyto</span>` : ''}</div>
+        <div class="atitle"><b>${esc(ty.name || 'New assessment')}</b>${ty.target ? `<span class="pill">${esc(ty.target)}</span>` : ''}${ty.leaf ? `<span class="pill">${esc(ty.leaf)}</span>` : ''}${ty.atype ? `<span class="pill">${esc(ty.atype)}</span>` : ''}${ty.untreatedOnly ? `<span class="pill warn">Untreated Plots Only</span>` : ''}${ty.noPhyto ? `<span class="pill">No Phyto</span>` : ''}</div>
         <button class="small danger" data-rm="${i}" title="Remove" aria-label="Remove" type="button">✕</button></div>
       ${needsStage(ty) && ty.stageMode === 'code' ? pestCodeBox(ty, i) : ''}
-      ${needsStage(ty) && ty.stageMode !== 'code' ? `<div class="stagebox"><b class="small">${word} growth stage</b>
+      ${needsStage(ty) && ty.stageMode !== 'code' ? `<div class="stagebox"><b class="small">${word} Growth Stage</b>
         <div class="grid3" style="margin-top:6px">${inp('stage', 'Majority *')}${inp('stageMin', 'Minimum')}${inp('stageMax', 'Maximum')}</div>
-        ${weed ? `<div class="arow"><b class="small">Weed size</b><label class="small" style="display:flex;align-items:center;gap:6px">Unit
+        ${weed ? `<div class="arow"><b class="small">Weed Size</b><label class="small" style="display:flex;align-items:center;gap:6px">Unit
           <select data-i="${i}" data-f="sizeUnit" style="width:auto;min-height:34px">${['cm', 'mm'].map(u => `<option ${(ty.sizeUnit || 'cm') === u ? 'selected' : ''}>${u}</option>`).join('')}</select></label></div>
           <div class="grid2" style="margin-top:6px">${inp('sizeH', 'Height')}${inp('sizeW', 'Width')}</div>` : ''}</div>` : ''}
-      ${isHeight(ty) ? `<label class="field" style="max-width:220px"><span>Height unit</span><select data-i="${i}" data-f="unit">${[...new Set(['mm', 'cm', ty.unit].filter(Boolean))].map(u => `<option ${ty.unit === u ? 'selected' : ''}>${u}</option>`).join('')}</select></label>` : ''}
-      <label class="chk" style="margin-bottom:.9rem"><input type="checkbox" data-i="${i}" data-c="untreatedOnly" ${ty.untreatedOnly ? 'checked' : ''}> Record on untreated plots only</label>
-      ${isPhyto(ty) ? `<label class="chk" style="margin-bottom:.9rem"><input type="checkbox" data-i="${i}" data-c="noPhyto" ${ty.noPhyto ? 'checked' : ''}> No phyto (fills 0 on every plot)</label>` : ''}
-      <details ${ty.name ? '' : 'open'}><summary>Name, unit, range, subsamples</summary>
+      ${isHeight(ty) ? `<label class="field" style="max-width:220px"><span>Height Unit</span><select data-i="${i}" data-f="unit">${[...new Set(['mm', 'cm', ty.unit].filter(Boolean))].map(u => `<option ${ty.unit === u ? 'selected' : ''}>${u}</option>`).join('')}</select></label>` : ''}
+      <label class="chk" style="margin-bottom:.9rem"><input type="checkbox" data-i="${i}" data-c="untreatedOnly" ${ty.untreatedOnly ? 'checked' : ''}> Record on Untreated Plots Only</label>
+      ${isPhyto(ty) ? `<label class="chk" style="margin-bottom:.9rem"><input type="checkbox" data-i="${i}" data-c="noPhyto" ${ty.noPhyto ? 'checked' : ''}> No Phyto (Fills 0 on Every Plot)</label>` : ''}
+      <details ${ty.name ? '' : 'open'}><summary>Name, Unit, Range, Subsamples</summary>
         <div class="type-row" style="margin-top:8px">
           <label class="tname"><span>Name</span><input data-i="${i}" data-f="name" value="${esc(ty.name)}" placeholder="Type an assessment name"></label>
           ${isHeight(ty) ? `<label><span>Unit</span><input disabled value="${esc(ty.unit)} (set above)"></label>` : `<label><span>Unit</span><input data-i="${i}" data-f="unit" value="${esc(ty.unit)}" placeholder="%, cm, 0–9"></label>`}
@@ -1502,7 +1667,7 @@ function viewAssessForm(t, a, startStep) {
           <label><span>Max</span><input data-i="${i}" data-f="max" value="${esc(ty.max)}" inputmode="decimal"></label>
           <label><span>Subsamples</span><input data-i="${i}" data-f="subs" value="${subsOf(ty)}" inputmode="numeric"></label>
         </div>
-        <label class="field" style="margin-top:10px"><span>Assessment type (free type)</span><input data-i="${i}" data-f="atype" list="atype-list" value="${esc(ty.atype || '')}" placeholder="e.g. Count, Score, Cover" autocomplete="off"></label>
+        <label class="field" style="margin-top:10px"><span>Assessment Type (free type)</span><input data-i="${i}" data-f="atype" list="atype-list" value="${esc(ty.atype || '')}" placeholder="e.g. Count, Score, Cover" autocomplete="off"></label>
       </details>
     </div>`;
   }
@@ -1510,7 +1675,7 @@ function viewAssessForm(t, a, startStep) {
     const n = d.types.length;
     const weeds = new Set(d.types.filter(x => x.kind === 'weed').map(x => x.target)).size, pests = new Set(d.types.filter(x => x.kind === 'pest').map(x => x.target)).size;
     $('sum').textContent = n ? `${n} assessment${n > 1 ? 's' : ''} added${weeds ? ` · ${weeds} weed${weeds > 1 ? 's' : ''}` : ''}${pests ? ` · ${pests} pest${pests > 1 ? 's' : ''}` : ''}` : '';
-    $('types').innerHTML = d.types.map(cardHtml).join('') || `<p class="muted">Nothing added yet. Describe an assessment above and tap <b>+ Add assessment</b>.</p>`;
+    $('types').innerHTML = d.types.map(cardHtml).join('') || `<p class="muted">Nothing added yet. Describe an assessment above and tap <b>+ Add Assessment</b>.</p>`;
     $('types').querySelectorAll('input[data-f],select[data-f]').forEach(inp => inp.oninput = () => {
       const i = +inp.dataset.i, f = inp.dataset.f, ty = d.types[i]; ty[f] = inp.value;
       if (STAGE_FIELDS.includes(f) && needsStage(ty)) d.types.forEach((o, j) => { if (j !== i && o.target === ty.target && o.kind === ty.kind) { o[f] = inp.value; const el = $('types').querySelector(`input[data-i="${j}"][data-f="${f}"]`); if (el) el.value = inp.value; } });
@@ -1542,6 +1707,7 @@ function viewAssessForm(t, a, startStep) {
       const el = $('types').querySelector(`input[data-i="${d.types.indexOf(noStage[0])}"][data-f="stage"]`) || $('types').querySelector(`select[data-pp="${d.types.indexOf(noStage[0])}"]`); if (el) { el.scrollIntoView({ block: 'center' }); el.focus(); }
       return;
     }
+    if (d.apps && !nPlots(t, d)) { showStep(1); alert('No plots are covered by the applications chosen. Tick at least one application, or choose All Applications.'); return; }
     const names = d.types.map(ty => typeLabel(ty).toLowerCase());
     if (new Set(names).size !== names.length) { showStep(2); alert('Two assessments have the same name and unit. Please make them distinct.'); return; }
     if (t.type === 'Herbicide' && t.untreated && d.types.length && !d.types.some(ty => ty.kind === 'weed' && /count/i.test(ty.name)) // any weed count (general or untreated) means no reminder
@@ -1550,20 +1716,43 @@ function viewAssessForm(t, a, startStep) {
     const ids = new Set(d.types.map(ty => ty.id));
     Object.values(d.data).forEach(r => Object.keys(r).forEach(k => { const base = k.startsWith('_s_') ? k.slice(3) : k; if (k !== '_note' && k !== '_na' && !ids.has(base)) delete r[k]; }));
     db.settings.assessor = d.assessor;
+    if (!d.device) stampAssessment(d); // remembers which device (and so whose signature) made this date
     const i = t.assessments.findIndex(x => x.id === d.id);
     if (i >= 0) t.assessments[i] = d; else t.assessments.push(d);
+    finished = true; dropDraft(key);
     t.updated = Date.now(); save();
     if (startAfter) go(`#/trial/${t.id}/a/${d.id}/plot/${firstIncomplete(t, d)}`);
     else { toast('Saved'); go(`#/trial/${t.id}`); }
   }
   $('a-start').onclick = () => commit(true);
   $('a-save').onclick = () => commit(false);
-  drawMenu(); drawBuilder(); drawTypes(); showStep(step);
+  /* drafts: the form is saved at every input or tap, with the step you were on */
+  let finished = false;
+  const collectFields = () => {
+    d.assessor = $('a-who').value.trim().toUpperCase(); d.notes = $('a-notes').value.trim();
+    d.cropBBCH = $('a-bbch').value.trim(); d.cropBBCHMin = $('a-bbch-min').value.trim(); d.cropBBCHMax = $('a-bbch-max').value.trim();
+    d.date = parseDmy($('a-date').value) || d.date;
+  };
+  const snap = () => {
+    if (finished || !$('a-date')) return null; // the form is already gone
+    collectFields(); if (!editing && !d.cropBBCH && !d.types.length && !d.notes && !d.apps) return null; // nothing worth keeping yet
+    const { data, ...rest } = d;
+    return { data: { d: JSON.parse(JSON.stringify(rest)), dateTxt: $('a-date').value }, step };
+  };
+  app.querySelector('main').addEventListener('input', watch); app.querySelector('main').addEventListener('change', watch);
+  app.querySelector('main').addEventListener('click', e => { if (!(e.target.closest && e.target.closest('#w-cancel'))) watch(); });
+  $('w-cancel').onclick = () => {
+    const dirty = !!getDraft(key) || (draftPending && draftPending.key === key);
+    if (dirty && !confirm(editing ? 'Discard your changes to this assessment date?' : 'Discard this unfinished assessment date? Everything you entered will be lost.')) return;
+    finished = true; dropDraft(key); go(back);
+  };
+  drawMenu(); drawBuilder(); drawTypes(); drawScope(); showStep(step);
 }
 
 /* ---------- DATA ENTRY (one plot per page) ---------- */
-function viewEntry(t, a, idx, focusAt) {
+function viewEntry(t, a, idx, focusAt, keepScroll) {
   const order = walkOrder(t, a);
+  if (!order.length) { toast('No plots are covered by the applications chosen for this date'); return goReplace(`#/trial/${t.id}`); }
   idx = clamp(idx, 0, order.length - 1);
   const p = order[idx];
   const last = order.length - 1;
@@ -1590,13 +1779,12 @@ function viewEntry(t, a, idx, focusAt) {
       <div class="inwrap"><input class="ev" data-t="${ty.id}" data-i="${i}" value="${esc(rec[ty.id] ?? '')}" inputmode="decimal" enterkeyhint="next" autocomplete="off">${ty.unit ? `<span class="sfx">${esc(ty.unit)}</span>` : ''}</div></label>`;
   };
 
-  app.innerHTML = `
-  <div class="shell" id="shell">
+  const inner = `
   <header class="top"><a class="back" href="#/trial/${t.id}">← ${esc(t.trialId)}</a><span class="spacer"></span>
     <a class="btn small" href="${base}/review">Review</a><a class="brand sm" href="#/" aria-label="FART – back to the home page"><b>FART</b><span>Field Assessment Recording Tool</span></a></header>
   <main class="entry">
     <div class="bar"><div style="width:${done / order.length * 100}%"></div></div>
-    <div class="small muted"><b>${esc(dmy(a.date))}</b> · ${done} of ${order.length} plots complete · page ${idx + 1} of ${order.length}</div>
+    <div class="small muted"><b>${esc(dmy(a.date))}</b> · ${done} of ${order.length} Plots Complete · Page ${idx + 1} of ${order.length}</div>
 
     <section class="card plot-card" style="margin-top:8px">
       <span class="plot-no">Plot ${pn(p.plot)}</span>${multiSet(t) ? `<span class="pill">${esc(setName(t, p.set))}</span>` : ''}
@@ -1610,20 +1798,20 @@ function viewEntry(t, a, idx, focusAt) {
       ${locked ? '<div class="nophyto">🔒 This date is locked. Unlock it from the trial page or Review to edit.</div>' : ''}${na && !locked ? '<div class="nophyto">Plot not assessed – recorded as NA</div>' : ''}
       ${a.types.map(fieldHtml).join('')}
       ${kb.sentinel('next')}
-      <label class="field" style="margin-bottom:0"><span>Plot note <span class="hint muted" style="font-weight:400">(optional – tap to add)</span></span>
+      <label class="field" style="margin-bottom:0"><span>Plot Note <span class="hint muted" style="font-weight:400">(optional – tap to add)</span></span>
         <input id="note" tabindex="-1" ${locked ? 'disabled' : ''} value="${esc(rec._note || '')}" enterkeyhint="done" autocomplete="off"></label>
     </section>
     </form>
 
     <div class="actions" style="justify-content:space-between;align-items:center">
-      <label class="small" style="display:flex;gap:.5rem;align-items:center">Go to
+      <label class="small" style="display:flex;gap:.5rem;align-items:center">Go To
         <select id="jump" style="width:auto;min-height:36px">${order.map((q, j) =>
           `<option value="${j}" ${j === idx ? 'selected' : ''}>${plotTag(t, q.plot)} · Rep ${q.rep}${plotComplete(t, a, q.plot) ? ' ✓' : plotStarted(a, q.plot) ? ' …' : ''}</option>`).join('')}</select></label>
       <span style="display:flex;gap:14px;flex-wrap:wrap">
-        ${locked ? '' : `<label class="chk small"><input type="checkbox" id="na" ${na ? 'checked' : ''}> Plot not assessed</label>`}
-        <label class="chk small"><input type="checkbox" id="sun" ${db.settings.contrast ? 'checked' : ''}> ☀ High contrast</label>
+        ${locked ? '' : `<label class="chk small"><input type="checkbox" id="na" ${na ? 'checked' : ''}> Plot Not Assessed</label>`}
+        <label class="chk small"><input type="checkbox" id="sun" ${db.settings.contrast ? 'checked' : ''}> ☀ High Contrast</label>
         <label class="chk small"><input type="checkbox" id="serp" ${(a.serpentine !== undefined ? a.serpentine : t.serpentine) ? 'checked' : ''}> Serpentine</label>
-        <label class="chk small"><input type="checkbox" id="showTrt" ${show ? 'checked' : ''}> Show treatment</label>
+        <label class="chk small"><input type="checkbox" id="showTrt" ${show ? 'checked' : ''}> Show Treatment</label>
       </span>
     </div>
 
@@ -1631,8 +1819,11 @@ function viewEntry(t, a, idx, focusAt) {
   <div class="navbtns">
     <button id="prev" ${idx === 0 ? 'disabled' : ''}>← Back</button>
     <button id="next" class="primary">Next →</button>
-  </div>
   </div>`;
+  // moving from plot to plot swaps the contents of the same screen, so the keyboard and scroll position stay put
+  const shellOld = keepScroll && document.getElementById('shell');
+  if (shellOld) { const m0 = shellOld.querySelector('main.entry'), st0 = m0 ? m0.scrollTop : 0; shellOld.innerHTML = inner; const m1 = shellOld.querySelector('main.entry'); if (m1) m1.scrollTop = st0; }
+  else app.innerHTML = `<div class="shell" id="shell">${inner}</div>`;
 
   const inputs = [...app.querySelectorAll('input.ev')];
   const note = document.getElementById('note');
@@ -1661,8 +1852,7 @@ function viewEntry(t, a, idx, focusAt) {
   // Draw the next plot in place (no hash change event) and refocus, so the keyboard stays open.
   function goPlot(to, at) {
     history.replaceState(null, '', `${base}/plot/${to}`);
-    window.scrollTo(0, 0);
-    viewEntry(t, a, to, at);
+    viewEntry(t, a, to, at, true);
   }
   function warnRange() { if (inputs.some(inp => outOfRange(a.types[inp.dataset.i], inp.value.trim()) === 'bad')) toast('A value is outside its expected range'); }
   function nextPlot(at) {
@@ -1692,11 +1882,11 @@ function viewEntry(t, a, idx, focusAt) {
   app.querySelector('[data-sent="next"]').onfocus = () => { if (idx < last) nextPlot(0); else if (fields.length) fields[fields.length - 1].focus(); };
   // Next goes through the assessments on this plot first, then on to the next plot. Back does the reverse.
   const nextBtn = document.getElementById('next');
-  const nextText = () => { const f = fields.indexOf(document.activeElement); return (f === fields.length - 1 || document.activeElement === note) ? (idx === last ? 'Finish → Review' : 'Next plot →') : 'Next →'; };
+  const nextText = () => { const f = fields.indexOf(document.activeElement); return (f === fields.length - 1 || document.activeElement === note) ? (idx === last ? 'Finish → Review' : 'Next Plot →') : 'Next →'; };
   const setNext = () => { nextBtn.textContent = nextText(); };
   fields.forEach(f => f.addEventListener('focus', setNext)); note.addEventListener('focus', setNext);
   // bring the box you move to into the middle of the visible area, clear of the keyboard
-  [...fields, note].forEach(el => el.addEventListener('focus', () => { setTimeout(() => el.scrollIntoView({ block: 'center' }), 60); setTimeout(() => { if (document.activeElement === el) el.scrollIntoView({ block: 'center' }); }, 380); }));
+  [...fields, note].forEach(el => el.addEventListener('focus', () => { ensureVisible(el); setTimeout(() => { if (document.activeElement === el) ensureVisible(el); }, 380); }));
   ['prev', 'next'].forEach(id => document.getElementById(id).addEventListener('mousedown', e => e.preventDefault()));
   nextBtn.onclick = () => { if (fields.includes(document.activeElement) || document.activeElement === note) step('down'); else if (fields.length) fields[0].focus(); else nextPlot(undefined); };
   document.getElementById('prev').onclick = () => { if (fields.includes(document.activeElement)) step('up'); else if (document.activeElement === note) step('up'); else prevPlot(undefined); };
@@ -1720,21 +1910,27 @@ function viewEntry(t, a, idx, focusAt) {
   document.getElementById('showTrt').onchange = e => { db.settings.showTrt = e.target.checked; save(); viewEntry(t, a, idx); };
   kb.shell(document.getElementById('shell'));
   check();
-  if (focusAt != null && fields.length) fields[Math.min(focusAt, fields.length - 1)].focus();
-  else { const firstEmpty = inputs.find(inp => inp.value === '') || null; if (firstEmpty && matchMedia('(pointer:fine)').matches) firstEmpty.focus(); }
+  if (focusAt != null && fields.length) { const el = fields[Math.min(focusAt, fields.length - 1)]; el.focus({ preventScroll: true }); ensureVisible(el); }
+  else { const firstEmpty = inputs.find(inp => inp.value === '') || null; if (firstEmpty && matchMedia('(pointer:fine)').matches) firstEmpty.focus({ preventScroll: true }); }
 }
 
 /* ---------- box plot (SVG) ---------- */
 function quantile(sorted, q) { const pos = (sorted.length - 1) * q, lo = Math.floor(pos), hi = Math.ceil(pos); return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo); }
-function boxPlotSvg(t, a, ty, sel, si) { // sel = { plot, t } highlights one point
+function boxPlotSvg(t, a, ty, sel, si, scale) { // sel = { plot, t } highlights one point; scale = 'fit' (zoom to the data) or 'full' (assessment min to max)
   const st = typeStats(t, a, ty, si);
-  const cols = range(t.trts).filter(k => applies(t, ty, k)).map(k => { const vals = st.groups[k].vals.filter(v => v.n != null); return { k, vals, v: vals.map(x => x.n).sort((x, y) => x - y) }; });
+  const cols = range(t.trts).filter(k => applies(t, ty, k, a)).map(k => { const vals = st.groups[k].vals.filter(v => v.n != null); return { k, vals, v: vals.map(x => x.n).sort((x, y) => x - y) }; });
   const all = cols.flatMap(c => c.v);
   const title = `<h3 style="margin:16px 0 4px">${esc(typeLabel(ty))}${multiSet(t) ? ' – ' + esc(setName(t, si)) : ''}</h3>`;
   if (!all.length) return `<div class="bp">${title}<p class="small muted">No values yet.</p></div>`;
   let lo = Math.min(...all), hi = Math.max(...all);
-  if (lo === hi) { lo -= 1; hi += 1; }
-  const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+  if (scale === 'full') { // the whole scale of the assessment, e.g. 0–100 %; no padding
+    const mn = num(ty.min), mx = num(ty.max);
+    lo = Math.min(mn != null ? mn : 0, lo); if (mx != null) hi = Math.max(mx, hi);
+    if (hi <= lo) hi = lo + 1;
+  } else {
+    if (lo === hi) { lo -= 1; hi += 1; }
+    const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+  }
   const colW = 46, L = 44, T = 10, B = 34, H = 210;
   const W = L + cols.length * colW + 8, plotH = H - T - B;
   const y = v => T + plotH - (v - lo) / (hi - lo) * plotH;
@@ -1767,7 +1963,7 @@ function boxPlotSvg(t, a, ty, sel, si) { // sel = { plot, t } highlights one poi
 const OUTLIER_RATIO = 2, OUTLIER_FLOOR = 0.15;
 const medianOf = arr => { const v = arr.slice().sort((x, y) => x - y), m = v.length >> 1; return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2; };
 function viewReview(t, a) {
-  const n = plotCount(t);
+  const n = nPlots(t, a);
   const done = countDone(t, a);
   const order = walkOrder(t, a);
   const idxOf = plot => order.findIndex(q => q.plot === plot);
@@ -1777,26 +1973,28 @@ function viewReview(t, a) {
   app.innerHTML = `
   <header class="top"><a class="back" href="#/trial/${t.id}">← ${esc(t.trialId)}</a><h1>Review · ${esc(dmy(a.date))}</h1><a class="brand sm" href="#/" aria-label="FART – back to the home page"><b>FART</b><span>Field Assessment Recording Tool</span></a></header>
   <main>
+    ${appLetters(t).length ? `<div class="pills" style="margin:0 0 .5rem"><span class="pill">${esc(scopeText(t, a))}</span></div>` : ''}
     <p class="small muted">${done} of ${n} plots complete. These are the raw values, grouped by treatment. Edit any value directly; tap a plot number to open that plot.</p>
     ${bufferPlots(t).length ? `<p class="small muted">Buffer plots (no values recorded): ${bufferPlots(t).sort((x, y) => x.plot - y.plot).map(b => plotTag(t, b.plot)).join(', ')}</p>` : ''}
     <div class="actions">
-      <a class="btn" href="${base}/plot/${firstIncomplete(t, a)}">← Back to plots</a>
+      <a class="btn" href="${base}/plot/${firstIncomplete(t, a)}">← Back to Plots</a>
       <button id="xl" class="primary">Export…</button>
       <button id="shr">Share</button>
-      <button id="lock">${a.locked ? '🔒 Unlock' : 'Lock this date'}</button>
+      <button id="lock" class="ibtn" type="button" title="${a.locked ? 'Locked – tap to unlock' : 'Lock this date'}" aria-label="${a.locked ? 'Unlock this date' : 'Lock this date'}">${a.locked ? ICON.lock : ICON.unlock}</button>
     </div>
     ${a.locked ? '<section class="card warnbox"><b>🔒 Locked.</b> Values cannot be changed until you unlock this date.</section>' : ''}
     <div class="legend" id="legend" style="margin-bottom:12px" hidden><span id="lg-miss" hidden><i class="sw miss"></i>Missing</span><span id="lg-out" hidden><i class="sw out"></i>Out of range, not a number, or a rep that is far from the others in its treatment</span></div>
     <section class="card" id="issues"></section>
-    <section class="card"><div class="arow"><div><h2 style="margin:0">Box plots</h2><span class="small muted">Spread of the reps for each treatment, one chart per assessment.</span></div>
-      <button id="bp-toggle" class="small">Show box plots</button></div><div id="bp"></div></section>
+    <section class="card"><div class="arow"><h2 style="margin:0">Box Plots</h2>
+      <button id="bp-toggle" class="small">Show Box Plots</button></div>
+      <div class="seg mini" id="bp-scale" style="margin-top:10px" hidden><button type="button" data-sc="fit">Zoom to Data</button><button type="button" data-sc="full">Full Scale</button></div><div id="bp"></div></section>
     ${a.types.map(ty => `
       <section class="card rv">
-        <h2>${esc(typeLabel(ty))}${ty.untreatedOnly ? ' <span class="pill warn">Untreated plots only – enter here</span>' : ''}</h2>
+        <h2>${esc(typeLabel(ty))}${ty.untreatedOnly ? ' <span class="pill warn">Untreated Plots Only – Enter Here</span>' : ''}</h2>
         <div class="scroll"><table class="review"><thead><tr>
           <th class="l">Trt</th>${range(t.reps).map(r => `<th>Rep ${r}</th>`).join('')}
         </tr></thead><tbody>
-          ${(multiSet(t) ? t.sets.map((_, i) => i) : [0]).map(si => (multiSet(t) ? `<tr class="setrow"><td colspan="${t.reps + 1}">${esc(setName(t, si))}</td></tr>` : '') + range(t.trts).filter(k => applies(t, ty, k)).map(k => `<tr class="${k === t.untreated ? 'utc' : ''}"><td class="l"><b>${k}</b>${k === t.untreated ? ' <span class="muted small">(UTC)</span>' : ''}${trtName(t, k) ? `<span class="tn">${esc(trtName(t, k))}</span>` : ''}</td>
+          ${(multiSet(t) ? t.sets.map((_, i) => i) : [0]).map(si => (multiSet(t) ? `<tr class="setrow"><td colspan="${t.reps + 1}">${esc(setName(t, si))}</td></tr>` : '') + range(t.trts).filter(k => applies(t, ty, k, a)).map(k => `<tr class="${k === t.untreated ? 'utc' : ''}"><td class="l"><b>${k}</b>${k === t.untreated ? ' <span class="muted small">(UTC)</span>' : ''}${trtName(t, k) ? `<span class="tn">${esc(trtName(t, k))}</span>` : ''}</td>
             ${range(t.reps).map(r => {
               const pl = allPlots.find(q => (q.set || 0) === si && q.rep === r && q.trt === k);
               if (!pl) return `<td class="muted">—</td>`;
@@ -1809,16 +2007,20 @@ function viewReview(t, a) {
             }).join('')}</tr>`).join('')).join('')}
         </tbody></table></div>
       </section>`).join('')}
-    ${Object.entries(a.data).some(([, r]) => r._note) ? `<section class="card"><h2>Plot notes</h2><ul>${
+    ${Object.entries(a.data).some(([, r]) => r._note) ? `<section class="card"><h2>Plot Notes</h2><ul>${
       Object.entries(a.data).filter(([, r]) => r._note).sort((x, y) => x[0] - y[0]).map(([pl, r]) => `<li><a href="${base}/plot/${idxOf(+pl)}">Plot ${plotTag(t, +pl)}</a>: ${esc(r._note)}</li>`).join('')}</ul></section>` : ''}
   </main>`;
 
   let bpOn = false;
   function drawBoxPlots() {
-    const el = document.getElementById('bp'); if (!bpOn) { el.innerHTML = ''; applySel(); return; }
-    el.innerHTML = a.types.map(ty => (multiSet(t) ? t.sets.map((_, i) => i) : [0]).map(si => boxPlotSvg(t, a, ty, selPt, si)).join('')).join('');
+    const el = document.getElementById('bp'), sc = db.settings.bpScale === 'full' ? 'full' : 'fit';
+    document.getElementById('bp-scale').hidden = !bpOn;
+    document.querySelectorAll('#bp-scale [data-sc]').forEach(b => b.classList.toggle('on', b.dataset.sc === sc));
+    if (!bpOn) { el.innerHTML = ''; applySel(); return; }
+    el.innerHTML = a.types.map(ty => (multiSet(t) ? t.sets.map((_, i) => i) : [0]).map(si => boxPlotSvg(t, a, ty, selPt, si, sc)).join('')).join('');
     applySel();
   }
+  document.getElementById('bp-scale').onclick = e => { const b = e.target.closest('[data-sc]'); if (!b) return; db.settings.bpScale = b.dataset.sc; save(); drawBoxPlots(); };
   let selPt = null; // the point tapped on a box plot
   function applySel() { // highlight that plot's treatment row and cell in the table
     app.querySelectorAll('tr.hl').forEach(r => r.classList.remove('hl'));
@@ -1833,13 +2035,13 @@ function viewReview(t, a) {
     selPt = selPt && String(selPt.plot) === c.dataset.plot && selPt.t === c.dataset.t ? null : { plot: c.dataset.plot, t: c.dataset.t };
     drawBoxPlots();
   };
-  document.getElementById('bp-toggle').onclick = () => { bpOn = !bpOn; if (!bpOn) selPt = null; document.getElementById('bp-toggle').textContent = bpOn ? 'Hide box plots' : 'Show box plots'; drawBoxPlots(); };
+  document.getElementById('bp-toggle').onclick = () => { bpOn = !bpOn; if (!bpOn) selPt = null; document.getElementById('bp-toggle').textContent = bpOn ? 'Hide Box Plots' : 'Show Box Plots'; drawBoxPlots(); };
   function refresh() {
     drawBoxPlots();
     const missing = new Set(), flagged = [], spreadKeys = new Set();
     const link = pl => `<a href="${base}/plot/${idxOf(pl)}">${pn(pl)}</a>`;
     a.types.forEach(ty => {
-      const grp = (multiSet(t) ? t.sets.map((_, i) => i) : [0]).flatMap(si => range(t.trts).filter(k => applies(t, ty, k)).map(k => ({ k, si, vs: allPlots.filter(p => p.trt === k && (p.set || 0) === si).map(p => ({ plot: p.plot, n: num(val(a, p.plot, ty.id)) })).filter(v => v.n != null) })));
+      const grp = (multiSet(t) ? t.sets.map((_, i) => i) : [0]).flatMap(si => range(t.trts).filter(k => applies(t, ty, k, a)).map(k => ({ k, si, vs: allPlots.filter(p => p.trt === k && (p.set || 0) === si).map(p => ({ plot: p.plot, n: num(val(a, p.plot, ty.id)) })).filter(v => v.n != null) })));
       const every = grp.flatMap(g => g.vs.map(v => Math.abs(v.n)));
       const bounded = ty.min !== '' && ty.max !== '' && Number(ty.max) > Number(ty.min);
       const floor = OUTLIER_FLOOR * (bounded ? Number(ty.max) - Number(ty.min) : Math.max(0, ...every));
@@ -1858,7 +2060,7 @@ function viewReview(t, a) {
       });
     });
     a.types.forEach(ty => allPlots.forEach(p => {
-      if (!applies(t, ty, p.trt)) return;
+      if (!applies(t, ty, p.trt, a)) return;
       const td = app.querySelector(`td.v[data-plot="${p.plot}"][data-t="${ty.id}"]`); if (!td) return;
       const raw = val(a, p.plot, ty.id), rng = outOfRange(ty, raw);
       td.classList.toggle('miss', raw === '');
@@ -1872,7 +2074,7 @@ function viewReview(t, a) {
     document.getElementById('legend').hidden = !miss.length && !flagged.length;
     document.getElementById('issues').innerHTML = (!miss.length && !flagged.length)
       ? `<b class="rep-ok">✓ No missing or flagged values.</b>`
-      : `<h3>Check these</h3><ul class="issues small">
+      : `<h3>Check These</h3><ul class="issues small">
           ${miss.length ? `<li><b>Missing data</b> in ${miss.length} plot${miss.length > 1 ? 's' : ''}: ${miss.map(pl => `<a href="${base}/plot/${idxOf(pl)}">${pn(pl)}</a>`).join(', ')}</li>` : ''}
           ${flagged.map(f => `<li><b>${esc(typeTitle(f.ty))}</b> · ${f.html}</li>`).join('')}
         </ul>`;
@@ -1897,11 +2099,7 @@ function viewReview(t, a) {
   });
   document.getElementById('xl').onclick = () => openExport(t, a);
   document.getElementById('shr').onclick = () => shareAssessment(t, a);
-  document.getElementById('lock').onclick = () => {
-    if (!a.locked) { if (!confirm('Lock this date? Values cannot be changed until you unlock it.')) return; a.locked = Date.now(); }
-    else { if (!confirm('Unlock this date so values can be edited?')) return; delete a.locked; }
-    t.updated = Date.now(); save(); viewReview(t, a);
-  };
+  document.getElementById('lock').onclick = () => toggleLock(t, a, () => viewReview(t, a));
   refresh();
 }
 
@@ -1918,9 +2116,11 @@ function expandCols(as) {
 const colVal = (c, plot) => c.k === null ? val(c.a, plot, c.ty.id) : ((((c.a.data[plot] || {})['_s_' + c.ty.id]) || [])[c.k] ?? (isNA(c.a, plot) ? 'NA' : ''));
 
 /* ---------- EXCEL EXPORT (real .xlsx, no internet needed) ---------- */
+const exportSig = list => (list.length === 1 ? sigOf(list[0]) : null) || mySig() || list.map(sigOf).find(Boolean) || null; // signature printed on an export
 function excelFile(t, only) {
-  const ps = plots(t).sort((x, y) => x.plot - y.plot);
   const as = (only ? [only] : [...t.assessments]).sort((x, y) => (x.date || '').localeCompare(y.date || '') || x.created - y.created);
+  const ps = plots(t).filter(p => as.some(a => inScope(t, a, p.trt))).sort((x, y) => x.plot - y.plot); // only plots that were assessed on one of these dates
+  const hasApps = appLetters(t).length > 0;
   const cell = raw => { const n = num(raw); return n != null ? n : (raw === '' ? null : raw); };
   const cols = expandCols(as).map(c => ({ ...c, label: `${c.label} ${dmy(c.a.date)}` }));
   const noteCols = as; // a plot-note column for every assessment date, even when empty
@@ -1929,7 +2129,7 @@ function excelFile(t, only) {
 
   // assessment details, repeated at the top of the Plot Data and Field Layout sheets
   const detail = (() => {
-    const rows = [[B('Trial'), t.trialId, B('Type'), t.type || null, B('Crop'), cp.name || null, B('Crop code'), cp.code || null, B('Reps × Trts'), `${t.reps} × ${t.trts}`]];
+    const rows = [[B('Trial'), t.trialId, B('Type'), t.type || null, B('Crop'), cp.name || null, B('Crop code'), cp.code || null, B('Reps × Trts'), `${t.reps} × ${t.trts}`, ...(hasApps ? [B('Applications'), appLetters(t).length] : [])]];
     as.forEach(a => {
       rows.push([B('Assessment date'), dmy(a.date), B('Assessor'), a.assessor || null, B('Crop GS (BBCH) majority'), a.cropBBCH || null, B('Min'), a.cropBBCHMin || null, B('Max'), a.cropBBCHMax || null, B('Notes'), a.notes || null]);
       const seenT = new Set();
@@ -1938,21 +2138,22 @@ function excelFile(t, only) {
         if (ty.stageMode === 'code') { rows.push([null, `Pest ${ty.target}`, B('Pest stage'), ty.stage || null]); return; }
         rows.push([null, `${ty.kind === 'weed' ? 'Weed' : 'Pest'} ${ty.target}`, B('Growth stage majority'), ty.stage || null, B('Min'), ty.stageMin || null, B('Max'), ty.stageMax || null, ...(ty.kind === 'weed' ? [B(`Height (${ty.sizeUnit || 'cm'})`), ty.sizeH || null, B(`Width (${ty.sizeUnit || 'cm'})`), ty.sizeW || null] : [])]);
       });
+      if (hasApps) rows.push([null, B('Applications assessed'), scopeText(t, a)]);
       rows.push([null, B('Assessments'), a.types.map(typeLabel).join('; ')]);
     });
     return rows;
   })();
 
   // 1. Plot data (wide) – raw values as recorded
-  const wide = [...detail, [], [...['Plot', 'Rep', 'Trt', 'Treatment', 'Crop', 'Crop code', ...(ms ? ['Crop/Variety'] : [])].map(B), ...cols.map(c => B(c.label)), ...noteCols.map(a => B(`Notes ${dmy(a.date)}`))]];
-  [...ps.map(p => ({ p })), ...bufferPlots(t).map(b => ({ b }))].sort((x, y) => (x.p || x.b).plot - (y.p || y.b).plot).forEach(({ p, b }) => b ? wide.push([pn(b.plot), b.rep || null, null, 'Buffer', cp.name || null, cp.code || null, ...(ms ? [setName(t, b.set)] : []), ...cols.map(() => 'Buffer'), ...noteCols.map(() => null)]) : wide.push([pn(p.plot), p.rep, p.trt, trtName(t, p.trt) || null, cp.name || null, cp.code || null, ...(ms ? [setName(t, p.set)] : []),
-    ...cols.map(c => applies(t, c.ty, p.trt) ? cell(colVal(c, p.plot)) : null), ...noteCols.map(a => (a.data[p.plot] && a.data[p.plot]._note) || null)]));
+  const wide = [...detail, [], [...['Plot', 'Rep', 'Trt', 'Treatment', ...(hasApps ? ['Applications'] : []), 'Crop', 'Crop code', ...(ms ? ['Crop/Variety'] : [])].map(B), ...cols.map(c => B(c.label)), ...noteCols.map(a => B(`Notes ${dmy(a.date)}`))]];
+  [...ps.map(p => ({ p })), ...bufferPlots(t).map(b => ({ b }))].sort((x, y) => (x.p || x.b).plot - (y.p || y.b).plot).forEach(({ p, b }) => b ? wide.push([pn(b.plot), b.rep || null, null, 'Buffer', ...(hasApps ? [null] : []), cp.name || null, cp.code || null, ...(ms ? [setName(t, b.set)] : []), ...cols.map(() => 'Buffer'), ...noteCols.map(() => null)]) : wide.push([pn(p.plot), p.rep, p.trt, trtName(t, p.trt) || null, ...(hasApps ? [trtApps(t, p.trt).join(', ') || null] : []), cp.name || null, cp.code || null, ...(ms ? [setName(t, p.set)] : []),
+    ...cols.map(c => applies(t, c.ty, p.trt, c.a) ? cell(colVal(c, p.plot)) : null), ...noteCols.map(a => (a.data[p.plot] && a.data[p.plot]._note) || null)]));
 
   // 2. Long format (one row per recorded value, one per subsample — good for pivot tables, R, ARM import)
-  const long = [['Trial', 'Crop', 'Crop code', ...(ms ? ['Crop/Variety'] : []), 'Plot', 'Rep', 'Trt', 'Treatment', 'Untreated', 'Date', 'Assessor', 'Crop BBCH (majority)', 'Crop BBCH min', 'Crop BBCH max', 'Assessment', 'Assessment type', 'Target', 'Target stage (majority)', 'Target stage min', 'Target stage max', 'Weed height', 'Weed width', 'Weed size unit', 'Leaf level', 'Subsample', 'Unit', 'Value', 'Plot note'].map(B)];
+  const long = [['Trial', 'Crop', 'Crop code', ...(ms ? ['Crop/Variety'] : []), 'Plot', 'Rep', 'Trt', 'Treatment', 'Untreated', 'Date', 'Assessor', 'Crop BBCH (majority)', 'Crop BBCH min', 'Crop BBCH max', 'Assessment', 'Assessment type', 'Target', 'Target stage (majority)', 'Target stage min', 'Target stage max', 'Weed height', 'Weed width', 'Weed size unit', 'Leaf level', 'Subsample', 'Unit', 'Value', 'Plot note', ...(hasApps ? ['Applications assessed'] : [])].map(B)];
   as.forEach(a => ps.forEach(p => expandCols([a]).forEach(c => {
-    const ty = c.ty; if (!applies(t, ty, p.trt)) return;
-    long.push([t.trialId, cp.name || null, cp.code || null, ...(ms ? [setName(t, p.set)] : []), pn(p.plot), p.rep, p.trt, trtName(t, p.trt) || null, p.trt === t.untreated ? 'Yes' : null, dmy(a.date), a.assessor || null, a.cropBBCH || null, a.cropBBCHMin || null, a.cropBBCHMax || null, ty.name, ty.atype || null, ty.target || null, ty.stage || null, ty.stageMin || null, ty.stageMax || null, ty.sizeH || null, ty.sizeW || null, (ty.sizeH || ty.sizeW) ? (ty.sizeUnit || 'cm') : null, ty.leaf || null, c.k === null ? null : c.k + 1, ty.unit || null, cell(colVal(c, p.plot)), (a.data[p.plot] && a.data[p.plot]._note) || null]);
+    const ty = c.ty; if (!applies(t, ty, p.trt, a)) return;
+    long.push([t.trialId, cp.name || null, cp.code || null, ...(ms ? [setName(t, p.set)] : []), pn(p.plot), p.rep, p.trt, trtName(t, p.trt) || null, p.trt === t.untreated ? 'Yes' : null, dmy(a.date), a.assessor || null, a.cropBBCH || null, a.cropBBCHMin || null, a.cropBBCHMax || null, ty.name, ty.atype || null, ty.target || null, ty.stage || null, ty.stageMin || null, ty.stageMax || null, ty.sizeH || null, ty.sizeW || null, (ty.sizeH || ty.sizeW) ? (ty.sizeUnit || 'cm') : null, ty.leaf || null, c.k === null ? null : c.k + 1, ty.unit || null, cell(colVal(c, p.plot)), (a.data[p.plot] && a.data[p.plot]._note) || null, ...(hasApps ? [scopeText(t, a)] : [])]);
   })));
 
   // 3. Field layout
@@ -1971,17 +2172,17 @@ function excelFile(t, only) {
 
   // 4. Trial info
   const info = [[B('Trial ID'), t.trialId], [B('Description'), t.desc || null], [B('Untreated treatment'), t.untreated || null], [B('Trial type'), t.type || null], [B('Crop'), cp.name || null], [B('Crop code'), cp.code || null], [B('Reps'), t.reps], [B('Treatments'), t.trts],
-    [B('Plots'), plotCount(t)], [B('Buffer plots'), bufferPlots(t).length || null], [B('Randomization'), isCustom(t) ? 'Custom randomization' : 'Regular RCB'], [B('Plot numbering'), isCustom(t) ? 'Custom' : t.numbering === 'seq' ? 'Sequential' : 'By rep (101, 201…)'],
-    [B('Exported'), new Date().toLocaleString('en-GB')], [B('NA'), 'Plot not assessed'], [], [B('Trt'), B('Treatment name')], ...range(t.trts).map(k => [k, trtName(t, k) || null]),
-    [], [B('Date'), B('Assessor'), B('Crop BBCH (majority)'), B('BBCH min'), B('BBCH max'), B('Assessment types'), B('Plots complete'), B('Notes')],
-    ...as.map(a => [dmy(a.date), a.assessor || null, a.cropBBCH || null, a.cropBBCHMin || null, a.cropBBCHMax || null, a.types.map(typeLabel).join('; '), `${countDone(t, a)} / ${plotCount(t)}`, a.notes || null])];
+    [B('Plots'), plotCount(t)], ...(hasApps ? [[B('Applications'), appLetters(t).length]] : []), [B('Buffer plots'), bufferPlots(t).length || null], [B('Randomization'), isCustom(t) ? 'Custom randomization' : 'Regular RCB'], [B('Plot numbering'), isCustom(t) ? 'Custom' : t.numbering === 'seq' ? 'Sequential' : 'By rep (101, 201…)'],
+    [B('Exported'), new Date().toLocaleString('en-GB')], [B('NA'), 'Plot not assessed'], [], [B('Trt'), B('Treatment name'), ...(hasApps ? [B('Applications')] : [])], ...range(t.trts).map(k => [k, trtName(t, k) || null, ...(hasApps ? [trtApps(t, k).join(', ') || null] : [])]),
+    [], [B('Date'), B('Assessor'), B('Crop BBCH (majority)'), B('BBCH min'), B('BBCH max'), B('Assessment types'), B('Plots complete'), B('Notes'), ...(hasApps ? [B('Applications assessed')] : [])],
+    ...as.map(a => [dmy(a.date), a.assessor || null, a.cropBBCH || null, a.cropBBCHMin || null, a.cropBBCHMax || null, a.types.map(typeLabel).join('; '), `${countDone(t, a)} / ${nPlots(t, a)}`, a.notes || null, ...(hasApps ? [scopeText(t, a)] : [])])];
 
   const blob = buildXlsx([
     { name: 'Plot Data', rows: wide, freeze: detail.length <= 5 ? detail.length + 2 : false },
     { name: 'Long Format', rows: long, freeze: true },
     { name: 'Field Layout', rows: lay },
     { name: 'Trial Info', rows: info },
-  ]);
+  ], exportSig(as));
   return { blob, name: exportName(t, only) + '.xlsx' };
 }
 const exportName = (t, only) => `${t.trialId.replace(/[^\w.-]+/g, '_')}_${only ? 'Assessment_' + dmy(only.date) : 'Assessments_' + dmy(today())}`.replace(/\//g, '-');
@@ -2004,9 +2205,9 @@ function pdfFile(t, list) {
   const f1 = n => (Math.round(n * 10) / 10).toString();
   const est = (str, size, bold) => String(str).length * size * (bold ? 0.56 : 0.52);
   const fit = (str, w, size, bold) => { str = String(str ?? ''); const max = Math.max(1, Math.floor(w / (size * (bold ? 0.56 : 0.52)))); return str.length > max ? str.slice(0, Math.max(1, max - 2)) + '..' : str; };
-  let curHdr = [];
+  let curHdr = [], curSig = null; const sigDefault = exportSig(list), SIGGAP = 10;
   const hdrH = hdr => hdr.length ? hdr.reduce((n, l) => n + l.size + 3, 0) + 10 : 0;
-  const newPage = hdr => { if (hdr) curHdr = hdr; cur = []; pages.push({ ops: cur, hdr: curHdr }); y = H - M - hdrH(curHdr); };
+  const newPage = hdr => { if (hdr) curHdr = hdr; cur = []; pages.push({ ops: cur, hdr: curHdr, sig: curSig }); y = H - M - hdrH(curHdr) - (curSig ? SIGGAP : 0); };
   const text = (x, yy, str, size = 10, bold = false) => cur.push(`BT /${bold ? 'F2' : 'F1'} ${size} Tf ${f1(x)} ${f1(yy)} Td (${pdfStr(str)}) Tj ET`);
   const rect = (x, yy, w, h, g) => cur.push(`${g} g ${f1(x)} ${f1(yy)} ${f1(w)} ${f1(h)} re f 0 g`);
   const hline = (x1, x2, yy) => cur.push(`0.75 G 0.5 w ${f1(x1)} ${f1(yy)} m ${f1(x2)} ${f1(yy)} l S 0 G`);
@@ -2045,18 +2246,19 @@ function pdfFile(t, list) {
     if (lines.length > maxLines) { lines.length = maxLines; lines[maxLines - 1] = lines[maxLines - 1].replace(/.{0,2}$/, '') + '…'; }
     return lines;
   };
-  const trialHdr = [{ s: `${t.trialId} – FART Field Assessment Recording Tool`, size: 11, bold: true }, { s: [t.type, cropTxt, `Reps: ${t.reps} · Treatments: ${t.trts}`].filter(Boolean).join('  ·  '), size: 8 }];
+  const repsTxt = `Reps: ${t.reps} · Treatments: ${t.trts}${appLetters(t).length ? ` · Applications: ${appLetters(t).length}` : ''}`;
+  const trialHdr = [{ s: `${t.trialId} – FART Field Assessment Recording Tool`, size: 11, bold: true }, { s: [t.type, cropTxt, repsTxt].filter(Boolean).join('  ·  '), size: 8 }];
   const assessDesc = ty => [typeLabel(ty), ty.untreatedOnly ? '[Untreated only]' : '', subsOf(ty) > 1 && !ty.noPhyto ? `Subsamples: ${subsOf(ty)}` : '', ty.noPhyto ? '[No phyto]' : '',
     needsStage(ty) ? (ty.stageMode === 'code' ? `Pest stage ${ty.stage || '–'}` : `${ty.kind === 'weed' ? 'Weed' : 'Pest'} GS ${rng(ty.stage || '–', ty.stageMin, ty.stageMax)}`) : '', ty.kind === 'weed' && (ty.sizeH || ty.sizeW) ? `Height ${ty.sizeH || '–'} × Width ${ty.sizeW || '–'} ${ty.sizeUnit || 'cm'}` : ''].filter(Boolean).join(' ');
   const buildHdr = a => [
     { s: `${t.trialId} – Assessment ${dmy(a.date)}`, size: 11, bold: true },
-    { s: [t.type, cropTxt, `Reps: ${t.reps} · Treatments: ${t.trts}`].filter(Boolean).join('  ·  '), size: 8 },
-    { s: `Assessor: ${a.assessor || '–'}    Crop growth stage (BBCH): ${rng(a.cropBBCH || '–', a.cropBBCHMin, a.cropBBCHMax)}${a.notes ? '    Notes: ' + a.notes : ''}`, size: 8 },
+    { s: [t.type, cropTxt, repsTxt].filter(Boolean).join('  ·  '), size: 8 },
+    { s: `Assessor: ${a.assessor || '–'}    Crop growth stage (BBCH): ${rng(a.cropBBCH || '–', a.cropBBCHMin, a.cropBBCHMax)}${appLetters(t).length ? '    Applications assessed: ' + scopeText(t, a) : ''}${a.notes ? '    Notes: ' + a.notes : ''}`, size: 8 },
     ...wrapText('Assessments: ' + a.types.map(assessDesc).join('  •  '), W - 2 * M, 7, 4).map(s => ({ s, size: 7 })),
   ];
   sorted.forEach(a => {
-    newPage(buildHdr(a));
-    line('Assessments on this date', 11, true, 3);
+    curSig = sigOf(a) || sigDefault; newPage(buildHdr(a));
+    line('Assessments on This Date', 11, true, 3);
     a.types.forEach((ty, i) => {
       const bits = [`${i + 1}. ${typeLabel(ty)}`];
       if (subsOf(ty) > 1) bits.push(`Subsamples: ${subsOf(ty)}`);
@@ -2067,7 +2269,7 @@ function pdfFile(t, list) {
     });
     y -= 6;
     a.types.forEach(ty => (ms ? t.sets.map((_, i) => i) : [0]).forEach(si => {
-      const ks = range(t.trts).filter(k => applies(t, ty, k));
+      const ks = range(t.trts).filter(k => applies(t, ty, k, a));
       ensure(60); line(typeLabel(ty) + (ty.untreatedOnly ? '  (Untreated plots only)' : '') + (ms ? ' – ' + setName(t, si) : ''), 11, true, 3);
       const repW = Math.max(30, Math.min(80, (W - 2 * M - 170) / t.reps));
       const widths = [170, ...range(t.reps).map(() => repW)];
@@ -2077,22 +2279,23 @@ function pdfFile(t, list) {
       table(['Treatment', ...range(t.reps).map(r => 'Rep ' + r)], rows, widths);
     }));
     // plot data, one row per plot (split across several tables when there are many columns)
-    newPage(); line(`Plot data – ${dmy(a.date)}   (NA = Plot not assessed)`, 12, true, 4);
-    const dc = [...expandCols([a]), { note: true, label: 'Plot note' }], prow = [...plots(t), ...bufferPlots(t)].sort((x, y2) => x.plot - y2.plot), avail = W - 2 * M - 200 - (ms ? 60 : 0);
+    newPage(); line(`Plot Data – ${dmy(a.date)}   (NA = Plot not assessed)`, 12, true, 4);
+    const dc = [...expandCols([a]), { note: true, label: 'Plot note' }], prow = [...scopedPlots(t, a), ...bufferPlots(t)].sort((x, y2) => x.plot - y2.plot), avail = W - 2 * M - 200 - (ms ? 60 : 0);
     const chunks = []; let curC = [], used = 0;
     dc.forEach(c => { const w = c.note ? 140 : 66; if (used + w > avail && curC.length) { chunks.push(curC); curC = []; used = 0; } curC.push(c); used += w; });
     if (curC.length) chunks.push(curC);
     chunks.forEach((chunk, i) => {
       if (i) ensure(80);
       table(['Plot', ...(ms ? ['Crop / variety'] : []), 'Rep', 'Trt', 'Treatment', ...chunk.map(c => c.label)],
-        prow.map(p => !(p.trt > 0) ? [pn(p.plot), ...(ms ? [setName(t, p.set)] : []), p.rep || '', '', 'Buffer', ...chunk.map(c => c.note ? '' : 'Buffer')] : [pn(p.plot), ...(ms ? [setName(t, p.set)] : []), p.rep, p.trt, trtName(t, p.trt) + (p.trt === t.untreated ? ' *' : ''), ...chunk.map(c => c.note ? ((a.data[p.plot] || {})._note || '') : (applies(t, c.ty, p.trt) ? colVal(c, p.plot) : ''))]),
+        prow.map(p => !(p.trt > 0) ? [pn(p.plot), ...(ms ? [setName(t, p.set)] : []), p.rep || '', '', 'Buffer', ...chunk.map(c => c.note ? '' : 'Buffer')] : [pn(p.plot), ...(ms ? [setName(t, p.set)] : []), p.rep, p.trt, trtName(t, p.trt) + (p.trt === t.untreated ? ' *' : ''), ...chunk.map(c => c.note ? ((a.data[p.plot] || {})._note || '') : (applies(t, c.ty, p.trt, a) ? colVal(c, p.plot) : ''))]),
         [40, ...(ms ? [60] : []), 30, 30, 100, ...chunk.map(c => c.note ? 140 : 66)], 8);
     });
     const notes = Object.entries(a.data).filter(([, r]) => r._note).sort((x, y2) => x[0] - y2[0]);
-    if (notes.length) { ensure(40); line('Plot notes', 11, true, 3); notes.forEach(([pl, r]) => line(`Plot ${plotTag(t, +pl)}: ${r._note}`, 9, false, 2)); }
+    if (notes.length) { ensure(40); line('Plot Notes', 11, true, 3); notes.forEach(([pl, r]) => line(`Plot ${plotTag(t, +pl)}: ${r._note}`, 9, false, 2)); }
   });
   // field layout, rep 1 at the bottom
-  newPage(sorted.length === 1 ? buildHdr(sorted[0]) : trialHdr); line('Field layout', 12, true, 4);
+  curSig = sorted.length === 1 ? (sigOf(sorted[0]) || sigDefault) : sigDefault;
+  newPage(sorted.length === 1 ? buildHdr(sorted[0]) : trialHdr); line('Field Layout', 12, true, 4);
   layoutSets(t).slice().reverse().forEach(st => { // first crop / variety at the bottom, like the field
     if (st.name) line(st.name, 10, true, 3);
     const maxc = Math.max(1, ...st.rows.map(r => r.cells.length));
@@ -2101,10 +2304,23 @@ function pdfFile(t, list) {
     table(['', ...range(maxc).map(i => String(i))], lrows, lw, 8);
   });
   if (t.untreated) line('* UTC (Untreated)', 8, false, 2);
-  pages.forEach((pg, i) => { // header (assessment details + page x of y) on every page
+  if (appLetters(t).length) {
+    line('Applications received', 9, true, 2);
+    wrapText(range(t.trts).filter(k => k !== t.untreated).map(k => `T${k}: ${trtApps(t, k).join(', ') || '–'}`).join('    '), W - 2 * M, 8, 6).forEach(l => line(l, 8, false, 2));
+  }
+  const sigIds = [...new Set(pages.filter(pg => pg.sig).map(pg => pg.sig.id))], sigObj = id => 5 + pages.length * 2 + sigIds.indexOf(id);
+  pages.forEach((pg, i) => { // header (assessment details + page x of y + signature) on every page
     cur = pg.ops; let yy = H - M;
-    pg.hdr.forEach((l, j) => { yy -= l.size; text(M, yy, fit(l.s, W - 2 * M - (j === 0 ? 90 : 0), l.size, l.bold), l.size, l.bold); yy -= 3; });
-    const lbl = `Page ${i + 1} of ${pages.length}`; text(W - M - est(lbl, 10, true), H - M - 11, lbl, 10, true);
+    const lbl = `Page ${i + 1} of ${pages.length}`, lw = est(lbl, 10, true);
+    let sw = 0, sh = 0;
+    if (pg.sig) { sh = 24; sw = sh * pg.sig.w / pg.sig.h; if (sw > 100) { sw = 100; sh = sw * pg.sig.h / pg.sig.w; } }
+    pg.hdr.forEach((l, j) => { yy -= l.size; text(M, yy, fit(l.s, W - 2 * M - (j === 0 ? 90 + (pg.sig ? sw + 50 : 0) : 0), l.size, l.bold), l.size, l.bold); yy -= 3; if (j === 0 && pg.sig) yy -= SIGGAP; });
+    text(W - M - lw, H - M - 11, lbl, 10, true);
+    if (pg.sig) {
+      const x2 = W - M - lw - 14, x1 = x2 - sw, y0 = H - M + 2 - sh;
+      text(x1 - est('Signed:', 8, true) - 4, y0 + sh / 2 - 3, 'Signed:', 8, true);
+      cur.push(`q ${f1(sw)} 0 0 ${f1(sh)} ${f1(x1)} ${f1(y0)} cm /Im${sigIds.indexOf(pg.sig.id) + 1} Do Q`);
+    }
     if (pg.hdr.length) hline(M, W - M, yy - 3);
     text(M, 20, `${t.trialId} – FART · Field Assessment Recording Tool`, 8);
   });
@@ -2116,10 +2332,11 @@ function pdfFile(t, list) {
   add(4, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>');
   pages.forEach((pg, i) => {
     const content = pg.ops.join('\n'), pn = 5 + i * 2;
-    add(pn, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${pn + 1} 0 R >>`);
+    add(pn, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >>${pg.sig ? ` /XObject << /Im${sigIds.indexOf(pg.sig.id) + 1} ${sigObj(pg.sig.id)} 0 R >>` : ''} >> /Contents ${pn + 1} 0 R >>`);
     add(pn + 1, `<< /Length ${content.length} >>\nstream\n${content}\nendstream`);
   });
-  const total = 4 + pages.length * 2, xref = out.length;
+  sigIds.forEach(id => { const sg = db.signatures[id] || pages.find(pg => pg.sig && pg.sig.id === id).sig, bin = atob(sg.gray); add(sigObj(id), `<< /Type /XObject /Subtype /Image /Width ${sg.w} /Height ${sg.h} /ColorSpace /DeviceGray /BitsPerComponent 8 /Length ${bin.length} >>\nstream\n${bin}\nendstream`); });
+  const total = 4 + pages.length * 2 + sigIds.length, xref = out.length;
   out += `xref\n0 ${total + 1}\n0000000000 65535 f \n` + offs.slice(1).map(o => String(o).padStart(10, '0') + ' 00000 n \n').join('');
   out += `trailer\n<< /Size ${total + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
   return { blob: new Blob([Uint8Array.from(out, c => c.charCodeAt(0))], { type: 'application/pdf' }), name: exportName(t, list.length === 1 ? list[0] : null) + '.pdf' };
@@ -2128,7 +2345,7 @@ function pdfFile(t, list) {
 /* ---------- share a trial with another device ---------- */
 function shareTrial(t) { // the whole trial (layout, assessments and values) as one small file
   const { section, archived, ...trial } = t;
-  const payload = { fart: 'trial-share', appVersion: APP_VERSION, sharedAt: Date.now(), trial };
+  const payload = { fart: 'trial-share', appVersion: APP_VERSION, sharedAt: Date.now(), trial, signatures: sigsFor(t.assessments) };
   const name = `${t.trialId.replace(/[^\w.-]+/g, '_')}_FART_shared_${dmy(today()).replace(/\//g, '-')}.json`;
   downloadMany([{ blob: new Blob([JSON.stringify(payload)], { type: 'application/json' }), name }]);
   toast('Trial file ready – send it to the other device');
@@ -2137,7 +2354,7 @@ const randSig = t => isCustom(t) // identifies the randomization: the same plots
   ? JSON.stringify(['c', t.trts, (t.plotList || []).map(p => [p.set || 0, p.plot, p.trt, p.row, p.col])])
   : JSON.stringify(['r', t.reps, t.trts, t.numbering, t.layout]);
 function shareAssessment(t, a) {
-  const payload = { fart: 'assessment-share', appVersion: APP_VERSION, sharedAt: Date.now(), trial: { trialId: t.trialId, sig: randSig(t) }, assessment: a };
+  const payload = { fart: 'assessment-share', appVersion: APP_VERSION, sharedAt: Date.now(), trial: { trialId: t.trialId, sig: randSig(t) }, assessment: a, signatures: sigsFor([a]) };
   const name = `${t.trialId.replace(/[^\w.-]+/g, '_')}_FART_Assessment_${dmy(a.date).replace(/\//g, '-')}_shared.json`;
   downloadMany([{ blob: new Blob([JSON.stringify(payload)], { type: 'application/json' }), name }]);
   toast('Assessment file ready – send it to the other device');
@@ -2148,6 +2365,7 @@ function importAssessment(d, t) { // t = the trial it is being imported into (or
   const target = t || db.trials.find(x => idMatch(x) && randSig(x) === d.trial.sig);
   if (!target || !idMatch(target)) { alert(`This assessment is from trial ${d.trial.trialId}.\n\nAn assessment can only be imported into the same trial. ${t ? 'This is a different trial.' : "That trial isn't on this device."}`); return false; }
   if (randSig(target) !== d.trial.sig) { alert(`The trial ID matches (${target.trialId}) but the randomization is different, so this assessment can't be imported.`); return false; }
+  adoptSigs(d.signatures);
   const ia = d.assessment, have = target.assessments.find(x => x.id === ia.id);
   if (!have) { target.assessments.push(ia); target.updated = Date.now(); save(); toast(`Assessment ${dmy(ia.date)} imported`); return target; }
   if (!confirm(`The ${dmy(ia.date)} assessment is already in ${target.trialId}.\n\nMerge the shared copy into it? Values you don't have yet are added; anything you already entered is kept as it is.`)) return false;
@@ -2186,7 +2404,7 @@ async function importShared(file) {
     if (d.fart === 'assessment-share') { if (importAssessment(d, null)) viewHome(); return; }
     const list = d.fart === 'trial-share' && d.trial ? [d.trial] : Array.isArray(d.trials) ? d.trials : null;
     if (!list || !list.length) throw new Error('not a trial file');
-    const msgs = [];
+    const msgs = []; adoptSigs(d.signatures);
     for (const nt of list) {
       migrateDb({ trials: [nt] }); delete nt.section;
       const i = db.trials.findIndex(x => x.id === nt.id);
@@ -2217,7 +2435,7 @@ function openCalendar(iso, onPick, onType) {
         <button type="button" class="calnav" data-nav="1" aria-label="Next month">›</button></div>
       <div class="cal-grid">${['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'].map(w => `<span class="cal-wd">${w}</span>`).join('')}
         ${Array(lead).fill('<span></span>').join('')}${range(days).map(dn => { const k = isoOf(vy, vm, dn); return `<button type="button" class="cal-day${k === sel ? ' on' : ''}${k === tIso ? ' today' : ''}" data-day="${k}">${dn}</button>`; }).join('')}</div>
-      <div class="cal-foot"><button type="button" class="small" data-today="1">Today</button>${onType ? '<button type="button" class="small" data-type="1">Type it in</button>' : ''}<button type="button" class="small" data-close="1">Cancel</button></div></div>`;
+      <div class="cal-foot"><button type="button" class="small" data-today="1">Today</button>${onType ? '<button type="button" class="small" data-type="1">Type It In</button>' : ''}<button type="button" class="small" data-close="1">Cancel</button></div></div>`;
   }
   render(); document.body.appendChild(ov);
   const close = () => { ov.remove(); document.removeEventListener('keydown', onKey); };
@@ -2236,9 +2454,47 @@ function openCalendar(iso, onPick, onType) {
   ov.onchange = e => { const sl = e.target.dataset && e.target.dataset.sel; if (!sl) return; if (sl === 'm') vm = +e.target.value; else vy = +e.target.value; render(); };
 }
 
+/* ---------- signature pad: sign with a finger; kept on this device and printed on exports ---------- */
+const bytesB64 = u8 => { let b = ''; for (let i = 0; i < u8.length; i += 8192) b += String.fromCharCode.apply(null, u8.subarray(i, i + 8192)); return btoa(b); };
+function openSignaturePad(onDone) {
+  const ov = document.createElement('div'); ov.className = 'modal';
+  ov.innerHTML = `<div class="sheet" role="dialog" aria-label="Signature"><h2>${mySig() ? 'Edit Signature' : 'Add Signature'}</h2>
+    <p class="small muted" style="margin-top:0">Sign with your finger in the box.</p>
+    <canvas class="sigpad" id="sig-cv"></canvas>
+    <div style="display:flex;gap:8px;margin:10px 0"><button id="sig-clear" class="small" type="button" style="width:auto;margin:0">Clear</button>${mySig() ? '<button id="sig-rm" class="small danger" type="button" style="width:auto;margin:0">Remove Signature</button>' : ''}</div>
+    <button id="sig-save" class="primary" type="button">Save Signature</button><button id="sig-x" type="button">Cancel</button></div>`;
+  document.body.appendChild(ov);
+  const $ = id => ov.querySelector(id), cv = $('#sig-cv'), ctx = cv.getContext('2d'), dpr = Math.max(1, window.devicePixelRatio || 1);
+  cv.width = Math.round(cv.clientWidth * dpr); cv.height = Math.round(cv.clientHeight * dpr);
+  ctx.scale(dpr, dpr); ctx.lineWidth = 2.6; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#000'; ctx.fillStyle = '#000';
+  let drawing = false, last = null;
+  const pos = e => { const r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+  cv.addEventListener('pointerdown', e => { e.preventDefault(); try { cv.setPointerCapture(e.pointerId); } catch (err) {} drawing = true; last = pos(e); ctx.beginPath(); ctx.arc(last.x, last.y, 1.3, 0, 7); ctx.fill(); });
+  cv.addEventListener('pointermove', e => { if (!drawing) return; e.preventDefault(); const p = pos(e); ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p.x, p.y); ctx.stroke(); last = p; });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => cv.addEventListener(ev, () => { drawing = false; }));
+  $('#sig-clear').onclick = () => { ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, cv.width, cv.height); ctx.restore(); };
+  $('#sig-x').onclick = () => ov.remove();
+  ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
+  const rm = $('#sig-rm'); if (rm) rm.onclick = () => { if (!confirm('Remove your signature? It will no longer appear on exported files.')) return; setSignature(null); ov.remove(); toast('Signature removed'); onDone(); };
+  $('#sig-save').onclick = () => {
+    const W = cv.width, H = cv.height, px = ctx.getImageData(0, 0, W, H).data;
+    let x0 = W, y0 = H, x1 = -1, y1 = -1;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (px[(y * W + x) * 4 + 3] > 20) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    if (x1 < 0) { toast('Sign in the box first'); return; }
+    const m = Math.round(4 * dpr); x0 = Math.max(0, x0 - m); y0 = Math.max(0, y0 - m); x1 = Math.min(W - 1, x1 + m); y1 = Math.min(H - 1, y1 + m);
+    const cw = x1 - x0 + 1, ch = y1 - y0 + 1, k = Math.min(1, 360 / cw, 120 / ch), w = Math.max(1, Math.round(cw * k)), h = Math.max(1, Math.round(ch * k));
+    const out = document.createElement('canvas'); out.width = w; out.height = h; const o = out.getContext('2d');
+    o.fillStyle = '#fff'; o.fillRect(0, 0, w, h); o.drawImage(cv, x0, y0, cw, ch, 0, 0, w, h);
+    const d2 = o.getImageData(0, 0, w, h).data, gray = new Uint8Array(w * h);
+    for (let i = 0; i < w * h; i++) gray[i] = Math.round(0.299 * d2[i * 4] + 0.587 * d2[i * 4 + 1] + 0.114 * d2[i * 4 + 2]);
+    setSignature({ id: uid(), png: out.toDataURL('image/png'), gray: bytesB64(gray), w, h, created: Date.now() });
+    ov.remove(); toast('Signature saved'); onDone();
+  };
+}
+
 function openExport(t, a) {
   const ov = document.createElement('div'); ov.className = 'modal';
-  ov.innerHTML = `<div class="sheet"><h2>Export ${a ? esc(dmy(a.date)) + ' assessment' : 'all assessments'}</h2>
+  ov.innerHTML = `<div class="sheet"><h2>Export ${a ? esc(dmy(a.date)) + ' Assessment' : 'All Assessments'}</h2>
     <button class="primary" data-k="xlsx">Excel (.xlsx)</button><button class="primary" data-k="pdf">PDF</button><button class="primary" data-k="both">PDF and Excel</button><button data-k="x">Cancel</button></div>`;
   document.body.appendChild(ov);
   ov.onclick = e => {
@@ -2286,13 +2542,13 @@ function saveLink(blob, name) {
 function colName(c) { let s = ''; c++; while (c > 0) { const m = (c - 1) % 26; s = String.fromCharCode(65 + m) + s; c = Math.floor((c - 1) / 26); } return s; }
 const xmlEsc = s => String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c])).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
 
-function sheetXml(sh) {
+function sheetXml(sh, withDrawing) {
   const widths = [];
   sh.rows.forEach(row => row.forEach((c, i) => {
     const v = c && typeof c === 'object' ? c.v : c; const len = v == null ? 0 : String(v).length;
     widths[i] = Math.max(widths[i] || 6, Math.min(45, len + 2));
   }));
-  let x = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">';
+  let x = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">';
   if (sh.freeze) { const fr = sh.freeze === true ? 1 : +sh.freeze; x += `<sheetViews><sheetView workbookViewId="0"><pane ySplit="${fr}" topLeftCell="A${fr + 1}" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>`; }
   if (widths.length) x += '<cols>' + widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w || 8}" customWidth="1"/>`).join('') + '</cols>';
   x += '<sheetData>';
@@ -2308,21 +2564,39 @@ function sheetXml(sh) {
     });
     x += '</row>';
   });
-  return x + '</sheetData></worksheet>';
+  return x + '</sheetData>' + (withDrawing ? '<drawing r:id="rId1"/>' : '') + '</worksheet>';
 }
+const b64Bytes = b64 => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
 
-function buildXlsx(sheets) {
+function buildXlsx(sheets, sig) {
   const used = new Set();
   sheets.forEach(sh => { let n = sh.name.replace(/[\[\]:*?\/\\]/g, '').slice(0, 31) || 'Sheet'; let i = 2; while (used.has(n.toLowerCase())) n = n.slice(0, 28) + ' ' + i++; used.add(n.toLowerCase()); sh.name = n; });
   const NS = 'http://schemas.openxmlformats.org';
+  let sigPx = null;
+  if (sig) { // "Signed:" and the signature picture, top right of every sheet (to the right of the data)
+    let h = 36, w = Math.round(h * sig.w / sig.h); if (w > 160) { w = 160; h = Math.round(w * sig.h / sig.w); } sigPx = { w, h };
+    sheets.forEach(sh => {
+      const ncols = Math.max(0, ...sh.rows.map(r => r.length)); if (!sh.rows.length) sh.rows.push([]);
+      const r0 = sh.rows[0]; while (r0.length < ncols + 1) r0.push(null); r0[ncols + 1] = { v: 'Signed:', b: true }; sh.sigCol = ncols + 2;
+    });
+  }
   const files = [
-    { name: '[Content_Types].xml', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="${NS}/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}</Types>` },
+    { name: '[Content_Types].xml', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="${NS}/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${sig ? '<Default Extension="png" ContentType="image/png"/>' : ''}${sig ? sheets.map((_, i) => `<Override PartName="/xl/drawings/drawing${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>`).join('') : ''}<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}</Types>` },
     { name: '_rels/.rels', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${NS}/package/2006/relationships"><Relationship Id="rId1" Type="${NS}/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>` },
     { name: 'xl/workbook.xml', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="${NS}/spreadsheetml/2006/main" xmlns:r="${NS}/officeDocument/2006/relationships"><sheets>${sheets.map((sh, i) => `<sheet name="${xmlEsc(sh.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets></workbook>` },
     { name: 'xl/_rels/workbook.xml.rels', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${NS}/package/2006/relationships">${sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="${NS}/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}<Relationship Id="rId${sheets.length + 1}" Type="${NS}/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>` },
     { name: 'xl/styles.xml', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="${NS}/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>` },
-    ...sheets.map((sh, i) => ({ name: `xl/worksheets/sheet${i + 1}.xml`, data: sheetXml(sh) })),
+    ...sheets.map((sh, i) => ({ name: `xl/worksheets/sheet${i + 1}.xml`, data: sheetXml(sh, !!sig) })),
   ];
+  if (sig) {
+    files.push({ name: 'xl/media/image1.png', data: b64Bytes(sig.png.split(',')[1]) });
+    sheets.forEach((sh, i) => {
+      files.push({ name: `xl/worksheets/_rels/sheet${i + 1}.xml.rels`, data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${NS}/package/2006/relationships"><Relationship Id="rId1" Type="${NS}/officeDocument/2006/relationships/drawing" Target="../drawings/drawing${i + 1}.xml"/></Relationships>` });
+      files.push({ name: `xl/drawings/_rels/drawing${i + 1}.xml.rels`, data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${NS}/package/2006/relationships"><Relationship Id="rId1" Type="${NS}/officeDocument/2006/relationships/image" Target="../media/image1.png"/></Relationships>` });
+      const cx = sigPx.w * 9525, cy = sigPx.h * 9525;
+      files.push({ name: `xl/drawings/drawing${i + 1}.xml`, data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="${NS}/drawingml/2006/spreadsheetDrawing" xmlns:a="${NS}/drawingml/2006/main"><xdr:oneCellAnchor><xdr:from><xdr:col>${sh.sigCol}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx="${cx}" cy="${cy}"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="2" name="Signature"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip xmlns:r="${NS}/officeDocument/2006/relationships" r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor></xdr:wsDr>` });
+    });
+  }
   return zipStore(files, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
 }
 
@@ -2331,7 +2605,7 @@ function crc32(b) { let c = 0xFFFFFFFF; for (let i = 0; i < b.length; i++) c = C
 function zipStore(files, type) { // uncompressed ZIP — valid for .xlsx
   const enc = new TextEncoder(); const parts = [], central = []; let offset = 0;
   files.forEach(f => {
-    const name = enc.encode(f.name), data = enc.encode(f.data), crc = crc32(data);
+    const name = enc.encode(f.name), data = f.data instanceof Uint8Array ? f.data : enc.encode(f.data), crc = crc32(data);
     const lh = new DataView(new ArrayBuffer(30));
     lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true); lh.setUint16(8, 0, true);
     lh.setUint16(10, 0, true); lh.setUint16(12, 0x21, true); lh.setUint32(14, crc, true);
