@@ -306,6 +306,10 @@ button, a, .chip, label, input[type=checkbox], select, summary { touch-action:ma
 .review.byplot td.v .subrow { display:flex; gap:4px; justify-content:center; }
 .review.byplot td.v input { width:58px; }
 .review.byplot tr.sep td { border-top:2px solid var(--line); }
+.review td.v.flash { animation:flashcell 3.5s ease-out; }
+.review td.v.flash input { outline:3px solid var(--accent); outline-offset:1px; }
+.review td.v.flash .subbox { outline:3px solid var(--accent); }
+@keyframes flashcell { 0%,60% { background:var(--accent-soft); } 100% { background:transparent; } }
 </style>
 </head>
 <body>
@@ -320,7 +324,7 @@ button, a, .chip, label, input[type=checkbox], select, summary { touch-action:ma
 </div>
 <script>
 'use strict';
-const APP_VERSION = 38;
+const APP_VERSION = 39;
 // keep APP_VERSION in step with VERSION in sw.js
 const cap = s => { s = String(s ?? ''); return s.charAt(0).toUpperCase() + s.slice(1); }; // first letter capital, used for titles and headers
 /* ---------- storage ---------- */
@@ -1977,9 +1981,9 @@ function viewReview(t, a) {
   const plotTable = ty => { // one row per plot, in plot-number order
     const nsub = ty.noPhyto ? 1 : subsOf(ty), ms2 = multiSet(t);
     const rows = [...scopedPlots(t, a)].filter(p => applies(t, ty, p.trt, a)).sort((x, y) => x.plot - y.plot);
-    return `<div class="scroll"><table class="review byplot"><thead><tr><th>Plot</th>${ms2 ? '<th>Crop</th>' : ''}<th>Rep</th><th>Trt</th><th>${nsub > 1 ? 'Subsamples' : 'Value'}</th></tr></thead><tbody>
+    return `<div class="scroll"><table class="review byplot"><thead><tr>${ms2 ? '<th>Crop</th>' : ''}<th>Rep</th><th>Plot</th><th>Trt</th><th>${nsub > 1 ? 'Subsamples' : 'Value'}</th></tr></thead><tbody>
       ${rows.map(pl => { const arr = (a.data[pl.plot] && a.data[pl.plot]['_s_' + ty.id]) || [];
-        return `<tr class="${pl.trt === t.untreated ? 'utc' : ''}"><td><a href="${base}/plot/${idxOf(pl.plot)}"><b>${pn(pl.plot)}</b></a></td>${ms2 ? `<td class="small">${esc(setName(t, pl.set))}</td>` : ''}<td>${pl.rep}</td><td>${pl.trt}${pl.trt === t.untreated ? ' <span class="muted small">(UTC)</span>' : ''}</td>
+        return `<tr class="${pl.trt === t.untreated ? 'utc' : ''}">${ms2 ? `<td class="small">${esc(setName(t, pl.set))}</td>` : ''}<td>${pl.rep}</td><td><a href="${base}/plot/${idxOf(pl.plot)}"><b>${pn(pl.plot)}</b></a></td><td>${pl.trt}${pl.trt === t.untreated ? ' <span class="muted small">(UTC)</span>' : ''}</td>
           <td class="v${nsub > 1 ? ' multi' : ''}" data-plot="${pl.plot}" data-t="${ty.id}">${nsub > 1 ? `<div class="subrow">${range(nsub).map(q => `<input class="sb" ${a.locked ? 'disabled' : ''} data-k="${q - 1}" value="${esc(arr[q - 1] ?? '')}" placeholder="${q}" inputmode="decimal" aria-label="Plot ${pn(pl.plot)} subsample ${q}">`).join('')}</div>` : `<input ${a.locked ? 'disabled' : ''} value="${esc(val(a, pl.plot, ty.id))}" inputmode="decimal" aria-label="Plot ${pn(pl.plot)}">`}</td></tr>`; }).join('')}
     </tbody></table></div>`;
   };
@@ -2053,7 +2057,7 @@ function viewReview(t, a) {
   function refresh() {
     drawBoxPlots();
     const missing = new Set(), flagged = [], spreadKeys = new Set();
-    const link = pl => `<a href="${base}/plot/${idxOf(pl)}">${pn(pl)}</a>`;
+    const link = (pl, tid) => `<a href="#" data-cell="${pl}" ${tid ? `data-ty="${tid}"` : ''}>${pn(pl)}</a>`;
     a.types.forEach(ty => {
       const grp = (multiSet(t) ? t.sets.map((_, i) => i) : [0]).flatMap(si => range(t.trts).filter(k => applies(t, ty, k, a)).map(k => ({ k, si, vs: allPlots.filter(p => p.trt === k && (p.set || 0) === si).map(p => ({ plot: p.plot, n: num(val(a, p.plot, ty.id)) })).filter(v => v.n != null) })));
       const every = grp.flatMap(g => g.vs.map(v => Math.abs(v.n)));
@@ -2069,8 +2073,8 @@ function viewReview(t, a) {
         if (!far.length) return;
         far.forEach(v => spreadKeys.add(`${v.plot}|${ty.id}`));
         const rest = vs.filter(o => !far.includes(o)).map(o => o.n);
-        flagged.push({ ty, html: vs.length === 2 ? `Trt ${k}${tl}: plot ${link(vs[0].plot)} = ${vs[0].n} and plot ${link(vs[1].plot)} = ${vs[1].n} are far apart`
-          : `Trt ${k}${tl}: ${far.map(v => `plot ${link(v.plot)} = ${v.n}`).join(', ')} – ${rest.length ? `far from the other reps (${rest.join(', ')})` : 'the reps are very spread out'}` });
+        flagged.push({ ty, html: vs.length === 2 ? `Trt ${k}${tl}: plot ${link(vs[0].plot, ty.id)} = ${vs[0].n} and plot ${link(vs[1].plot, ty.id)} = ${vs[1].n} are far apart`
+          : `Trt ${k}${tl}: ${far.map(v => `plot ${link(v.plot, ty.id)} = ${v.n}`).join(', ')} – ${rest.length ? `far from the other reps (${rest.join(', ')})` : 'the reps are very spread out'}` });
       });
     });
     a.types.forEach(ty => allPlots.forEach(p => {
@@ -2080,7 +2084,7 @@ function viewReview(t, a) {
       td.classList.toggle('miss', raw === '');
       td.classList.toggle('out', rng !== '' || spreadKeys.has(`${p.plot}|${ty.id}`));
       if (raw === '') missing.add(p.plot);
-      else if (rng) flagged.push({ ty, html: `plot ${link(p.plot)} = ${esc(raw)} (${rng === 'warn' ? 'not a number' : 'out of range'})` });
+      else if (rng) flagged.push({ ty, html: `plot ${link(p.plot, ty.id)} = ${esc(raw)} (${rng === 'warn' ? 'not a number' : 'out of range'})` });
     }));
     const miss = [...missing].sort((x, y) => x - y);
     // the key only lists what is actually showing on this page
@@ -2089,7 +2093,7 @@ function viewReview(t, a) {
     document.getElementById('issues').innerHTML = (!miss.length && !flagged.length)
       ? `<b class="rep-ok">✓ No missing or flagged values.</b>`
       : `<h3>Check These</h3><ul class="issues small">
-          ${miss.length ? `<li><b>Missing data</b> in ${miss.length} plot${miss.length > 1 ? 's' : ''}: ${miss.map(pl => `<a href="${base}/plot/${idxOf(pl)}">${pn(pl)}</a>`).join(', ')}</li>` : ''}
+          ${miss.length ? `<li><b>Missing data</b> in ${miss.length} plot${miss.length > 1 ? 's' : ''}: ${miss.map(pl => link(pl)).join(', ')}</li>` : ''}
           ${flagged.map(f => `<li><b>${esc(typeTitle(f.ty))}</b> · ${f.html}</li>`).join('')}
         </ul>`;
   }
@@ -2111,6 +2115,14 @@ function viewReview(t, a) {
     };
     inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } };
   });
+  document.getElementById('issues').onclick = e => { // jump to that value in the table and highlight it
+    const l = e.target.closest('a[data-cell]'); if (!l) return; e.preventDefault();
+    const sel = `td.v[data-plot="${l.dataset.cell}"]` + (l.dataset.ty ? `[data-t="${l.dataset.ty}"]` : '.miss');
+    const td = app.querySelector(sel) || app.querySelector(`td.v[data-plot="${l.dataset.cell}"]`); if (!td) return;
+    td.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    app.querySelectorAll('.flash').forEach(x => x.classList.remove('flash')); void td.offsetWidth; td.classList.add('flash');
+    setTimeout(() => td.classList.remove('flash'), 3500);
+  };
   document.getElementById('rv-order').onclick = e => { const b = e.target.closest('[data-o]'); if (!b || b.dataset.o === (byPlot ? 'plot' : 'trt')) return; db.settings.rvOrder = b.dataset.o; save(); const y = window.scrollY; viewReview(t, a); window.scrollTo(0, y); };
   document.getElementById('xl').onclick = () => openExport(t, a);
   document.getElementById('shr').onclick = () => shareAssessment(t, a);
@@ -2273,18 +2285,8 @@ function pdfFile(t, list) {
   ];
   sorted.forEach(a => {
     curSig = sigOf(a) || sigDefault; newPage(buildHdr(a));
-    line('Assessments on This Date', 11, true, 3);
-    a.types.forEach((ty, i) => {
-      const bits = [`${i + 1}. ${typeLabel(ty)}`];
-      if (subsOf(ty) > 1) bits.push(`Subsamples: ${subsOf(ty)}`);
-      if (ty.noPhyto) bits.push('No phyto (0 on all plots)');
-      if (needsStage(ty)) bits.push(ty.stageMode === 'code' ? `Pest stage ${ty.stage || '–'}` : `${ty.kind === 'weed' ? 'Weed' : 'Pest'} growth stage ${rng(ty.stage || '–', ty.stageMin, ty.stageMax)}`);
-      if (ty.kind === 'weed' && (ty.sizeH || ty.sizeW)) bits.push(`Height ${ty.sizeH || '–'} × Width ${ty.sizeW || '–'} ${ty.sizeUnit || 'cm'}`);
-      line(bits.join('   ·   '), 9, false, 2);
-    });
-    y -= 6;
     // plot data, one row per plot (split across several tables when there are many columns)
-    newPage(); line(`Plot Data – ${dmy(a.date)}   (NA = Plot not assessed)`, 12, true, 4);
+    line(`Plot Data – ${dmy(a.date)}   (NA = Plot not assessed)`, 12, true, 4);
     const dc = [...expandCols([a]), { note: true, label: 'Plot note' }], prow = [...scopedPlots(t, a), ...bufferPlots(t)].sort((x, y2) => x.plot - y2.plot), avail = W - 2 * M - 200 - (ms ? 60 : 0);
     const chunks = []; let curC = [], used = 0;
     dc.forEach(c => { const w = c.note ? 140 : 66; if (used + w > avail && curC.length) { chunks.push(curC); curC = []; used = 0; } curC.push(c); used += w; });
