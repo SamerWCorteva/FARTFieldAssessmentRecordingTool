@@ -298,6 +298,14 @@ button, a, .chip, label, input[type=checkbox], select, summary { touch-action:ma
 .draftcard h3 { margin:0 0 .2rem; }
 .sigpad { display:block; width:100%; height:170px; border:2px dashed var(--line); border-radius:12px; background:#fff; touch-action:none; }
 .h3s { margin:14px 0 6px; font-size:1rem; }
+.review td.v .subbox { border:1.5px solid var(--line); border-radius:10px; background:var(--card); padding:3px 4px 5px; display:inline-block; }
+.review td.v .subbox a.pl { font-weight:700; color:var(--ink); font-size:.75rem; border-bottom:1px solid var(--line); margin-bottom:3px; padding-bottom:2px; }
+.review td.v .subbox input.sb { display:block; width:52px; margin:2px auto; }
+.review td.v.multi { padding:.3rem .25rem; }
+.review.byplot td, .review.byplot th { text-align:center; }
+.review.byplot td.v .subrow { display:flex; gap:4px; justify-content:center; }
+.review.byplot td.v input { width:58px; }
+.review.byplot tr.sep td { border-top:2px solid var(--line); }
 </style>
 </head>
 <body>
@@ -312,7 +320,7 @@ button, a, .chip, label, input[type=checkbox], select, summary { touch-action:ma
 </div>
 <script>
 'use strict';
-const APP_VERSION = 37;
+const APP_VERSION = 38;
 // keep APP_VERSION in step with VERSION in sw.js
 const cap = s => { s = String(s ?? ''); return s.charAt(0).toUpperCase() + s.slice(1); }; // first letter capital, used for titles and headers
 /* ---------- storage ---------- */
@@ -620,12 +628,12 @@ const trtApps = (t, trt) => ((t.trtApps && t.trtApps[trt - 1]) || []).filter(l =
 const isUtc = (t, trt) => !!t.untreated && trt === t.untreated;
 function inScope(t, a, trt) { // is this treatment assessed on this date?
   if (!a || !a.apps || !appLetters(t).length) return true;
-  if (isUtc(t, trt)) return a.appsUntreated !== false;
+  if (isUtc(t, trt)) return true; // the untreated check is always assessed
   return trtApps(t, trt).some(l => a.apps.includes(l));
 }
 const scopedPlots = (t, a) => plots(t).filter(p => inScope(t, a, p.trt));
 const nPlots = (t, a) => scopedPlots(t, a).length;
-const scopeText = (t, a) => !appLetters(t).length ? '' : !a || !a.apps ? 'All Applications' : `Application${a.apps.length === 1 ? '' : 's'} ${a.apps.join(', ') || '–'}${t.untreated ? (a.appsUntreated !== false ? ' + Untreated' : ' (Untreated Excluded)') : ''}`;
+const scopeText = (t, a) => !appLetters(t).length ? '' : !a || !a.apps ? 'All Applications' : `Application${a.apps.length === 1 ? '' : 's'} ${a.apps.join(', ') || '–'}${t.untreated ? ' + Untreated' : ''}`;
 const applies = (t, ty, trt, a) => (!a || inScope(t, a, trt)) && (!ty.untreatedOnly || (!!t.untreated && trt === t.untreated));
 // growth stage (+ size for weeds) is asked for weeds and insect pests, not for diseases
 const isHeight = ty => /height/i.test(ty.name) && !ty.target;
@@ -1407,11 +1415,10 @@ function viewAssessForm(t, a, startStep) {
   const editing = !!a;
   const key = `assess:${t.id}:${editing ? a.id : 'new'}`, draft = getDraft(key); // saved at every step; reopening carries on where you were
   const d = editing ? JSON.parse(JSON.stringify(a)) : {
-    id: uid(), date: today(), assessor: db.settings.assessor || '', cropBBCH: '', cropBBCHMin: '', cropBBCHMax: '', notes: '', types: [], data: {}, created: Date.now(), apps: null, appsUntreated: true
+    id: uid(), date: today(), assessor: db.settings.assessor || '', cropBBCH: '', cropBBCHMin: '', cropBBCHMax: '', notes: '', types: [], data: {}, created: Date.now(), apps: null
   };
   if (draft) { Object.assign(d, JSON.parse(JSON.stringify(draft.data.d))); d.data = editing ? JSON.parse(JSON.stringify(a.data)) : {}; }
   if (!Array.isArray(d.apps)) d.apps = null;
-  if (d.appsUntreated === undefined) d.appsUntreated = true;
   // a new date starts blank – earlier dates in this trial can be looked at (and copied from) under "Previous assessments"
   const prevAs = t.assessments.filter(x => x.id !== d.id && x.types.length).sort((x, y) => (y.date || '').localeCompare(x.date || '') || y.created - x.created);
   const back = `#/trial/${t.id}`;
@@ -1443,7 +1450,6 @@ function viewAssessForm(t, a, startStep) {
           <h3 class="h3s">Plots to Assess</h3>
           <div class="seg mini"><button type="button" id="ap-all">All Applications</button><button type="button" id="ap-sel">Choose Applications</button></div>
           <div id="ap-chips" class="appchips" hidden></div>
-          <label class="chk" id="ap-utc-wrap" hidden><input type="checkbox" id="ap-utc"> Include Untreated Plots (Trt ${t.untreated || ''})</label>
           <p class="small muted" id="ap-info" style="margin:.4rem 0 0"></p>
         </div>
       </section>
@@ -1507,16 +1513,14 @@ function viewAssessForm(t, a, startStep) {
   function drawScope() {
     const L = appLetters(t), sel = !!d.apps;
     $('ap-all').classList.toggle('on', !sel); $('ap-sel').classList.toggle('on', sel);
-    $('ap-chips').hidden = !sel; $('ap-utc-wrap').hidden = !sel || !t.untreated;
+    $('ap-chips').hidden = !sel;
     $('ap-chips').innerHTML = L.map(l => `<button type="button" class="chip ${sel && d.apps.includes(l) ? 'on' : ''}" data-ap="${l}">${l}</button>`).join('');
     $('ap-chips').querySelectorAll('[data-ap]').forEach(b => b.onclick = () => { const l = b.dataset.ap; d.apps = d.apps.includes(l) ? d.apps.filter(x => x !== l) : [...d.apps, l].sort(); drawScope(); });
-    $('ap-utc').checked = d.appsUntreated !== false;
-    const n = nPlots(t, d), tot = plots(t).length;
-    $('ap-info').textContent = sel ? `${n} of ${tot} plots will be assessed on this date.${n ? '' : ' Tick at least one application.'}` : `All ${tot} plots will be assessed on this date.`;
+    const nPlotsUtc = () => plots(t).filter(p => isUtc(t, p.trt)).length, n = nPlots(t, d), tot = plots(t).length;
+    $('ap-info').textContent = sel ? `${n} of ${tot} plots will be assessed on this date${t.untreated ? ' (untreated always included)' : ''}.${n > nPlotsUtc() ? '' : ' Tick at least one application.'}` : `All ${tot} plots will be assessed on this date.`;
   }
   $('ap-all').onclick = () => { d.apps = null; drawScope(); };
   $('ap-sel').onclick = () => { if (!d.apps) d.apps = []; drawScope(); };
-  $('ap-utc').onchange = () => { d.appsUntreated = $('ap-utc').checked; drawScope(); };
   const watch = () => { if (!finished) queueDraft(key, snap); };
   const pickDate = () => openCalendar(parseDmy($('a-date').value) || today(), iso => { $('a-date').value = dmy(iso); watch(); }, () => { $('a-date').readOnly = false; $('a-date').focus(); });
   $('a-cal').onclick = pickDate; $('a-date').onclick = () => { if ($('a-date').readOnly) pickDate(); };
@@ -1707,7 +1711,7 @@ function viewAssessForm(t, a, startStep) {
       const el = $('types').querySelector(`input[data-i="${d.types.indexOf(noStage[0])}"][data-f="stage"]`) || $('types').querySelector(`select[data-pp="${d.types.indexOf(noStage[0])}"]`); if (el) { el.scrollIntoView({ block: 'center' }); el.focus(); }
       return;
     }
-    if (d.apps && !nPlots(t, d)) { showStep(1); alert('No plots are covered by the applications chosen. Tick at least one application, or choose All Applications.'); return; }
+    if (d.apps && !d.apps.length) { showStep(1); alert('No plots are covered by the applications chosen. Tick at least one application, or choose All Applications.'); return; }
     const names = d.types.map(ty => typeLabel(ty).toLowerCase());
     if (new Set(names).size !== names.length) { showStep(2); alert('Two assessments have the same name and unit. Please make them distinct.'); return; }
     if (t.type === 'Herbicide' && t.untreated && d.types.length && !d.types.some(ty => ty.kind === 'weed' && /count/i.test(ty.name)) // any weed count (general or untreated) means no reminder
@@ -1969,12 +1973,22 @@ function viewReview(t, a) {
   const idxOf = plot => order.findIndex(q => q.plot === plot);
   const base = `#/trial/${t.id}/a/${a.id}`;
   const allPlots = plots(t);
+  const byPlot = db.settings.rvOrder === 'plot';
+  const plotTable = ty => { // one row per plot, in plot-number order
+    const nsub = ty.noPhyto ? 1 : subsOf(ty), ms2 = multiSet(t);
+    const rows = [...scopedPlots(t, a)].filter(p => applies(t, ty, p.trt, a)).sort((x, y) => x.plot - y.plot);
+    return `<div class="scroll"><table class="review byplot"><thead><tr><th>Plot</th>${ms2 ? '<th>Crop</th>' : ''}<th>Rep</th><th>Trt</th><th>${nsub > 1 ? 'Subsamples' : 'Value'}</th></tr></thead><tbody>
+      ${rows.map(pl => { const arr = (a.data[pl.plot] && a.data[pl.plot]['_s_' + ty.id]) || [];
+        return `<tr class="${pl.trt === t.untreated ? 'utc' : ''}"><td><a href="${base}/plot/${idxOf(pl.plot)}"><b>${pn(pl.plot)}</b></a></td>${ms2 ? `<td class="small">${esc(setName(t, pl.set))}</td>` : ''}<td>${pl.rep}</td><td>${pl.trt}${pl.trt === t.untreated ? ' <span class="muted small">(UTC)</span>' : ''}</td>
+          <td class="v${nsub > 1 ? ' multi' : ''}" data-plot="${pl.plot}" data-t="${ty.id}">${nsub > 1 ? `<div class="subrow">${range(nsub).map(q => `<input class="sb" ${a.locked ? 'disabled' : ''} data-k="${q - 1}" value="${esc(arr[q - 1] ?? '')}" placeholder="${q}" inputmode="decimal" aria-label="Plot ${pn(pl.plot)} subsample ${q}">`).join('')}</div>` : `<input ${a.locked ? 'disabled' : ''} value="${esc(val(a, pl.plot, ty.id))}" inputmode="decimal" aria-label="Plot ${pn(pl.plot)}">`}</td></tr>`; }).join('')}
+    </tbody></table></div>`;
+  };
 
   app.innerHTML = `
   <header class="top"><a class="back" href="#/trial/${t.id}">← ${esc(t.trialId)}</a><h1>Review · ${esc(dmy(a.date))}</h1><a class="brand sm" href="#/" aria-label="FART – back to the home page"><b>FART</b><span>Field Assessment Recording Tool</span></a></header>
   <main>
     ${appLetters(t).length ? `<div class="pills" style="margin:0 0 .5rem"><span class="pill">${esc(scopeText(t, a))}</span></div>` : ''}
-    <p class="small muted">${done} of ${n} plots complete. These are the raw values, grouped by treatment. Edit any value directly; tap a plot number to open that plot.</p>
+    <p class="small muted">${done} of ${n} plots complete. These are the raw values (switch the view below). Edit any value directly; tap a plot number to open that plot.</p>
     ${bufferPlots(t).length ? `<p class="small muted">Buffer plots (no values recorded): ${bufferPlots(t).sort((x, y) => x.plot - y.plot).map(b => plotTag(t, b.plot)).join(', ')}</p>` : ''}
     <div class="actions">
       <a class="btn" href="${base}/plot/${firstIncomplete(t, a)}">← Back to Plots</a>
@@ -1985,13 +1999,14 @@ function viewReview(t, a) {
     ${a.locked ? '<section class="card warnbox"><b>🔒 Locked.</b> Values cannot be changed until you unlock this date.</section>' : ''}
     <div class="legend" id="legend" style="margin-bottom:12px" hidden><span id="lg-miss" hidden><i class="sw miss"></i>Missing</span><span id="lg-out" hidden><i class="sw out"></i>Out of range, not a number, or a rep that is far from the others in its treatment</span></div>
     <section class="card" id="issues"></section>
+    <div class="arow" style="margin:0 0 10px"><b class="small">View</b><div class="seg mini" id="rv-order" style="margin:0"><button type="button" data-o="trt" class="${db.settings.rvOrder === 'plot' ? '' : 'on'}">Treatment Order</button><button type="button" data-o="plot" class="${db.settings.rvOrder === 'plot' ? 'on' : ''}">Plot Order</button></div></div>
     <section class="card"><div class="arow"><h2 style="margin:0">Box Plots</h2>
       <button id="bp-toggle" class="small">Show Box Plots</button></div>
       <div class="seg mini" id="bp-scale" style="margin-top:10px" hidden><button type="button" data-sc="fit">Zoom to Data</button><button type="button" data-sc="full">Full Scale</button></div><div id="bp"></div></section>
     ${a.types.map(ty => `
       <section class="card rv">
         <h2>${esc(typeLabel(ty))}${ty.untreatedOnly ? ' <span class="pill warn">Untreated Plots Only – Enter Here</span>' : ''}</h2>
-        <div class="scroll"><table class="review"><thead><tr>
+        ${byPlot ? plotTable(ty) : `<div class="scroll"><table class="review"><thead><tr>
           <th class="l">Trt</th>${range(t.reps).map(r => `<th>Rep ${r}</th>`).join('')}
         </tr></thead><tbody>
           ${(multiSet(t) ? t.sets.map((_, i) => i) : [0]).map(si => (multiSet(t) ? `<tr class="setrow"><td colspan="${t.reps + 1}">${esc(setName(t, si))}</td></tr>` : '') + range(t.trts).filter(k => applies(t, ty, k, a)).map(k => `<tr class="${k === t.untreated ? 'utc' : ''}"><td class="l"><b>${k}</b>${k === t.untreated ? ' <span class="muted small">(UTC)</span>' : ''}${trtName(t, k) ? `<span class="tn">${esc(trtName(t, k))}</span>` : ''}</td>
@@ -2000,12 +2015,11 @@ function viewReview(t, a) {
               if (!pl) return `<td class="muted">—</td>`;
               const nsub = ty.noPhyto ? 1 : subsOf(ty);
               if (nsub > 1) { const arr = (a.data[pl.plot] && a.data[pl.plot]['_s_' + ty.id]) || [];
-                return `<td class="v" data-plot="${pl.plot}" data-t="${ty.id}"><div>${range(nsub).map(q => `<input class="sb" ${a.locked ? 'disabled' : ''} data-k="${q - 1}" value="${esc(arr[q - 1] ?? '')}" inputmode="decimal" aria-label="Plot ${pn(pl.plot)} subsample ${q}">`).join('')}</div>
-                  <a href="${base}/plot/${idxOf(pl.plot)}">${pn(pl.plot)}</a></td>`; }
+                return `<td class="v multi" data-plot="${pl.plot}" data-t="${ty.id}"><div class="subbox"><a class="pl" href="${base}/plot/${idxOf(pl.plot)}">Plot ${pn(pl.plot)}</a>${range(nsub).map(q => `<input class="sb" ${a.locked ? 'disabled' : ''} data-k="${q - 1}" value="${esc(arr[q - 1] ?? '')}" placeholder="${q}" inputmode="decimal" aria-label="Plot ${pn(pl.plot)} subsample ${q}">`).join('')}</div></td>`; }
               return `<td class="v" data-plot="${pl.plot}" data-t="${ty.id}"><input ${a.locked ? 'disabled' : ''} value="${esc(val(a, pl.plot, ty.id))}" inputmode="decimal" aria-label="Plot ${pn(pl.plot)}">
                 <a href="${base}/plot/${idxOf(pl.plot)}">${pn(pl.plot)}</a></td>`;
             }).join('')}</tr>`).join('')).join('')}
-        </tbody></table></div>
+        </tbody></table></div>`}
       </section>`).join('')}
     ${Object.entries(a.data).some(([, r]) => r._note) ? `<section class="card"><h2>Plot Notes</h2><ul>${
       Object.entries(a.data).filter(([, r]) => r._note).sort((x, y) => x[0] - y[0]).map(([pl, r]) => `<li><a href="${base}/plot/${idxOf(+pl)}">Plot ${plotTag(t, +pl)}</a>: ${esc(r._note)}</li>`).join('')}</ul></section>` : ''}
@@ -2097,6 +2111,7 @@ function viewReview(t, a) {
     };
     inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } };
   });
+  document.getElementById('rv-order').onclick = e => { const b = e.target.closest('[data-o]'); if (!b || b.dataset.o === (byPlot ? 'plot' : 'trt')) return; db.settings.rvOrder = b.dataset.o; save(); const y = window.scrollY; viewReview(t, a); window.scrollTo(0, y); };
   document.getElementById('xl').onclick = () => openExport(t, a);
   document.getElementById('shr').onclick = () => shareAssessment(t, a);
   document.getElementById('lock').onclick = () => toggleLock(t, a, () => viewReview(t, a));
@@ -2268,16 +2283,6 @@ function pdfFile(t, list) {
       line(bits.join('   ·   '), 9, false, 2);
     });
     y -= 6;
-    a.types.forEach(ty => (ms ? t.sets.map((_, i) => i) : [0]).forEach(si => {
-      const ks = range(t.trts).filter(k => applies(t, ty, k, a));
-      ensure(60); line(typeLabel(ty) + (ty.untreatedOnly ? '  (Untreated plots only)' : '') + (ms ? ' – ' + setName(t, si) : ''), 11, true, 3);
-      const repW = Math.max(30, Math.min(80, (W - 2 * M - 170) / t.reps));
-      const widths = [170, ...range(t.reps).map(() => repW)];
-      const nsub = ty.noPhyto ? 1 : subsOf(ty);
-      const cellOf = pl => { if (!pl) return ''; if (nsub > 1) return (((a.data[pl.plot] || {})['_s_' + ty.id]) || []).filter(x => x !== '').join(' / '); return val(a, pl.plot, ty.id); };
-      const rows = ks.map(k => [`${k} ${trtName(t, k)}${k === t.untreated ? ' (UTC)' : ''}`.trim(), ...range(t.reps).map(r => cellOf(plots(t).find(q => (q.set || 0) === si && q.rep === r && q.trt === k)))]);
-      table(['Treatment', ...range(t.reps).map(r => 'Rep ' + r)], rows, widths);
-    }));
     // plot data, one row per plot (split across several tables when there are many columns)
     newPage(); line(`Plot Data – ${dmy(a.date)}   (NA = Plot not assessed)`, 12, true, 4);
     const dc = [...expandCols([a]), { note: true, label: 'Plot note' }], prow = [...scopedPlots(t, a), ...bufferPlots(t)].sort((x, y2) => x.plot - y2.plot), avail = W - 2 * M - 200 - (ms ? 60 : 0);
@@ -2292,6 +2297,17 @@ function pdfFile(t, list) {
     });
     const notes = Object.entries(a.data).filter(([, r]) => r._note).sort((x, y2) => x[0] - y2[0]);
     if (notes.length) { ensure(40); line('Plot Notes', 11, true, 3); notes.forEach(([pl, r]) => line(`Plot ${plotTag(t, +pl)}: ${r._note}`, 9, false, 2)); }
+    newPage(); line(`Treatment Tables – ${dmy(a.date)}`, 12, true, 4);
+    a.types.forEach(ty => (ms ? t.sets.map((_, i) => i) : [0]).forEach(si => {
+      const ks = range(t.trts).filter(k => applies(t, ty, k, a));
+      ensure(60); line(typeLabel(ty) + (ty.untreatedOnly ? '  (Untreated plots only)' : '') + (ms ? ' – ' + setName(t, si) : ''), 11, true, 3);
+      const repW = Math.max(30, Math.min(80, (W - 2 * M - 170) / t.reps));
+      const widths = [170, ...range(t.reps).map(() => repW)];
+      const nsub = ty.noPhyto ? 1 : subsOf(ty);
+      const cellOf = pl => { if (!pl) return ''; if (nsub > 1) return (((a.data[pl.plot] || {})['_s_' + ty.id]) || []).filter(x => x !== '').join(' / '); return val(a, pl.plot, ty.id); };
+      const rows = ks.map(k => [`${k} ${trtName(t, k)}${k === t.untreated ? ' (UTC)' : ''}`.trim(), ...range(t.reps).map(r => cellOf(plots(t).find(q => (q.set || 0) === si && q.rep === r && q.trt === k)))]);
+      table(['Treatment', ...range(t.reps).map(r => 'Rep ' + r)], rows, widths);
+    }));
   });
   // field layout, rep 1 at the bottom
   curSig = sorted.length === 1 ? (sigOf(sorted[0]) || sigDefault) : sigDefault;
