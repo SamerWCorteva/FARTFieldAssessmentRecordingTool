@@ -324,7 +324,7 @@ button, a, .chip, label, input[type=checkbox], select, summary { touch-action:ma
 </div>
 <script>
 'use strict';
-const APP_VERSION = 39;
+const APP_VERSION = 40;
 // keep APP_VERSION in step with VERSION in sw.js
 const cap = s => { s = String(s ?? ''); return s.charAt(0).toUpperCase() + s.slice(1); }; // first letter capital, used for titles and headers
 /* ---------- storage ---------- */
@@ -2143,7 +2143,7 @@ function expandCols(as) {
 const colVal = (c, plot) => c.k === null ? val(c.a, plot, c.ty.id) : ((((c.a.data[plot] || {})['_s_' + c.ty.id]) || [])[c.k] ?? (isNA(c.a, plot) ? 'NA' : ''));
 
 /* ---------- EXCEL EXPORT (real .xlsx, no internet needed) ---------- */
-const exportSig = list => (list.length === 1 ? sigOf(list[0]) : null) || mySig() || list.map(sigOf).find(Boolean) || null; // signature printed on an export
+const exportSig = list => list.map(sigOf).find(Boolean) || null; // signature printed on an export: always the original assessor's
 function excelFile(t, only) {
   const as = (only ? [only] : [...t.assessments]).sort((x, y) => (x.date || '').localeCompare(y.date || '') || x.created - y.created);
   const ps = plots(t).filter(p => as.some(a => inScope(t, a, p.trt))).sort((x, y) => x.plot - y.plot); // only plots that were assessed on one of these dates
@@ -2361,7 +2361,9 @@ function pdfFile(t, list) {
 }
 
 /* ---------- share a trial with another device ---------- */
+function stampOwn(t) { let n = 0; t.assessments.forEach(a => { if (!a.device) { stampAssessment(a); n++; } }); if (n) save(); } // dates made before signatures existed belong to this device, so mark them before they leave it
 function shareTrial(t) { // the whole trial (layout, assessments and values) as one small file
+  stampOwn(t);
   const { section, archived, ...trial } = t;
   const payload = { fart: 'trial-share', appVersion: APP_VERSION, sharedAt: Date.now(), trial, signatures: sigsFor(t.assessments) };
   const name = `${t.trialId.replace(/[^\w.-]+/g, '_')}_FART_shared_${dmy(today()).replace(/\//g, '-')}.json`;
@@ -2372,6 +2374,7 @@ const randSig = t => isCustom(t) // identifies the randomization: the same plots
   ? JSON.stringify(['c', t.trts, (t.plotList || []).map(p => [p.set || 0, p.plot, p.trt, p.row, p.col])])
   : JSON.stringify(['r', t.reps, t.trts, t.numbering, t.layout]);
 function shareAssessment(t, a) {
+  stampOwn(t);
   const payload = { fart: 'assessment-share', appVersion: APP_VERSION, sharedAt: Date.now(), trial: { trialId: t.trialId, sig: randSig(t) }, assessment: a, signatures: sigsFor([a]) };
   const name = `${t.trialId.replace(/[^\w.-]+/g, '_')}_FART_Assessment_${dmy(a.date).replace(/\//g, '-')}_shared.json`;
   downloadMany([{ blob: new Blob([JSON.stringify(payload)], { type: 'application/json' }), name }]);
@@ -2701,6 +2704,7 @@ if (location.protocol.startsWith('http')) {
 // Ask the browser not to clear saved data when the device is low on space.
 try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) {}
 
+db.trials.forEach(stampOwn); // assessments from before signatures existed were made on this device
 render();
 </script>
 </body>
