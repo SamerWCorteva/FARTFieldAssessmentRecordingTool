@@ -2711,6 +2711,20 @@ const GEO_NOTE = "Phone GPS coordinates (WGS84). The ± value is the GPS's accur
 const geoAccRange = cs => { const a = cs.map(c => Math.round(c.acc || 0)).filter(Boolean); if (!a.length) return ''; const lo = Math.min(...a), hi = Math.max(...a); return lo === hi ? `±${lo} m` : `±${lo}–${hi} m`; };
 const geoHeaderTxt = t => { const cs = geoLabelled(t); if (!cs.length) return ''; const r = geoAccRange(cs); return `Trial corners (WGS84, phone GPS${r ? ' ' + r : ''}): ${cs.map(c => `${c.lab}: ${fmtCoord(c.lat)}, ${fmtCoord(c.lon)}`).join('    ')}`; };
 const parkSvg = (v, p) => { const [x, y] = scr(v, p); return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="13" fill="#e8590c" stroke="#fff" stroke-width="2.5"/><text x="${x.toFixed(1)}" y="${(y + 5).toFixed(1)}" text-anchor="middle" font-size="14" font-weight="800" fill="#fff">P</text>`; };
+function trialMapSvg(t, W, H) { // the trial on a map: numbered corners, each with its LL / UL / UR / LR tag once all 4 are in, and the gate
+  const cs = geoPts(t), pk = geoParking(t), st = db.settings.mapStyle || 'sat', sat = st !== 'none';
+  const v = fitView([...cs, ...(pk ? [pk] : [])], W, H, 0.9);
+  let s = tilesSvg(v, st) + outlineSvg(v, cs, !sat) + (pk ? parkSvg(v, pk) : '');
+  if (cs.length === 4) {
+    const P = cs.map(c => scr(v, c)), cx = P.reduce((a, q) => a + q[0], 0) / 4, cy = P.reduce((a, q) => a + q[1], 0) / 4;
+    P.forEach(([x, y], i) => { const dx = x - cx, dy = y - cy, d = Math.hypot(dx, dy) || 1, bx = clamp(x + dx / d * 27, 17, W - 17), by = clamp(y + dy / d * 22, 11, H - 11); // the tag sits just outside its corner
+      s += `<rect x="${(bx - 16).toFixed(1)}" y="${(by - 10).toFixed(1)}" width="32" height="20" rx="10" fill="#ffd400" stroke="#000" stroke-width="1.5"/><text x="${bx.toFixed(1)}" y="${(by + 4.5).toFixed(1)}" text-anchor="middle" font-size="12" font-weight="800" fill="#000">${cs[i].lab}</text>`; });
+  }
+  s += `<text x="8" y="16" font-size="12" font-weight="700" fill="${sat ? '#fff' : '#5a6877'}" style="${sat ? 'paint-order:stroke;stroke:#000;stroke-width:3px;' : ''}">N ↑</text>`;
+  if (st === 'sat') s += `<text x="${W - 8}" y="${H - 5}" text-anchor="end" font-size="8" fill="#fff" style="paint-order:stroke;stroke:#000;stroke-width:2px;">Imagery © Esri</text>`;
+  else if (st === 'map') s += `<text x="${W - 8}" y="${H - 5}" text-anchor="end" font-size="8" fill="#222" style="paint-order:stroke;stroke:#fff;stroke-width:2px;">© OpenStreetMap</text>`;
+  return s;
+}
 function cornerRowsHtml(t) { // corner numbers with their coordinates; with all 4 in, choose which one is LL / UL / UR / LR
   const cs = geoPts(t), pk = geoParking(t), pick = cs.length === 4, chosen = !!(t.geo && t.geo.labels);
   return (pick ? `<p class="small" style="margin:0 0 4px"><b>Which corner is which?</b> <span class="muted">${chosen ? 'LL Lower Left · UL Upper Left · UR Upper Right · LR Lower Right.' : 'Suggested from the map (north at the top) – check each one and change it if needed.'}</span></p>` : '')
@@ -2733,7 +2747,7 @@ function geoCardHtml(t) {
       <div style="margin-top:8px">${cornerRowsHtml(t)}</div>
       ${info ? `<p class="small muted" style="margin:6px 0 0">${esc(info)}</p>` : ''}
       <p class="small muted" style="margin:6px 0 0"><b>Accuracy:</b> ${esc(GEO_NOTE)}</p>
-      <div class="actions" style="margin:10px 0 0"><a class="btn primary small" href="#/trial/${t.id}/location">Location Sheet…</a><button id="geo-copy" type="button" class="small">Copy Coordinates</button><a class="btn small" target="_blank" rel="noopener" href="https://www.google.com/maps?q=${first.lat},${first.lon}">Open in Maps</a><button id="geo-clear" type="button" class="small">Clear</button></div>`
+      <div class="actions" style="margin:10px 0 0"><a class="btn primary small" href="#/trial/${t.id}/location">Location Sheet…</a><button id="geo-copy" type="button" class="small">Copy Coordinates</button><button id="geo-nav" type="button" class="small">${pk ? 'Open Parking / Gate in Maps' : n === 4 ? 'Open LL Corner in Maps' : 'Open in Maps'}</button><button id="geo-clear" type="button" class="small">Clear</button></div>`
     : `<p class="small muted" style="margin:6px 0 0">Walk around the trial and record each of its 4 corners, and the parking / gate. You will see where you are on a map, the outline of the trial, and the coordinates of every corner. These fill in the Location Sheet. Needs location permission; the satellite background needs a connection, the rest works offline.</p>
       <div class="actions" style="margin:10px 0 0"><a class="btn small" href="#/trial/${t.id}/location">Location Sheet…</a></div>`}`;
 }
@@ -2743,12 +2757,12 @@ function wireGeoCard(t, again) {
   w.onclick = () => openTrialMap(t, again);
   const mini = document.getElementById('geo-mini'), cs = geoPts(t), pk = geoParking(t);
   if (mini && (cs.length || pk)) { // the same map as the walk screen (satellite / street when online, plain when offline)
-    const st = db.settings.mapStyle || 'sat', sat = st !== 'none', v = fitView([...cs, ...(pk ? [pk] : [])], 320, 200, 0.7);
-    mini.innerHTML = tilesSvg(v, st) + outlineSvg(v, cs, !sat) + (pk ? parkSvg(v, pk) : '') + `<text x="8" y="16" font-size="12" font-weight="700" fill="${sat ? '#fff' : '#5a6877'}" style="${sat ? 'paint-order:stroke;stroke:#000;stroke-width:3px;' : ''}">N ↑</text>`
-      + (st === 'sat' ? '<text x="312" y="195" text-anchor="end" font-size="8" fill="#fff" style="paint-order:stroke;stroke:#000;stroke-width:2px;">Imagery © Esri</text>' : st === 'map' ? '<text x="312" y="195" text-anchor="end" font-size="8" fill="#222" style="paint-order:stroke;stroke:#fff;stroke-width:2px;">© OpenStreetMap</text>' : '');
+    mini.innerHTML = trialMapSvg(t, 320, 200);
     mini.onclick = () => openTrialMap(t, again);
     mini.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTrialMap(t, again); } };
   }
+  const nav = document.getElementById('geo-nav');
+  if (nav) nav.onclick = () => { const p = geoParking(t) || geoLL(t); if (p) location.href = `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lon}`; }; // the gate to drive to, else the LL corner; opened in place so no blank page is left
   const cp = document.getElementById('geo-copy');
   if (cp) cp.onclick = () => { const txt = `${t.trialId}\n${geoCopyText(t)}\n\n${GEO_NOTE}`; (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(() => toast('Coordinates copied'), () => prompt('Copy the coordinates:', txt)); };
   const cl = document.getElementById('geo-clear');
@@ -2994,7 +3008,7 @@ function viewLocation(t) {
       <label class="field"><span>Protocol No <span class="muted" style="font-weight:400">(from the Trial Number – change it if needed)</span></span><input data-k="protocol" value="${esc(L.protocol || autoProtocol(t.trialId))}" autocomplete="off" autocapitalize="characters" style="text-transform:uppercase"></label>
       ${fld(LOC_TEXT[1], 'e.g. nearest town / farm')}${fld(LOC_TEXT[2])}
     </div></section>
-    ${cs.length ? `<section class="card"><h2>Corners</h2>${cornerRowsHtml(t)}</section>` : ''}
+    ${cs.length ? `<section class="card"><h2>Corners</h2><svg class="minimap" id="loc-cornmap" viewBox="0 0 320 220" style="margin:0 0 10px" role="img" aria-label="The trial with its numbered corners"></svg>${cornerRowsHtml(t)}</section>` : ''}
     ${cs.length || pk ? `<section class="card"><h2>Maps on the Sheet</h2>
       <p class="small muted" style="margin:0">Drag to move, pinch to zoom (or use − and ＋). The sheet uses exactly what you see here. The satellite picture needs internet.</p>
       ${locMapHtml('ov', 'Overview')}${locMapHtml('cu', 'Close-up')}</section>` : ''}
@@ -3008,7 +3022,7 @@ function viewLocation(t) {
         <label class="field"><span>What3Words Trial</span><span style="display:flex;gap:6px"><input data-k="w3wTrial" value="${esc(L.w3wTrial || '')}" placeholder="word.word.word" autocomplete="off" autocapitalize="off"><button type="button" class="small" data-w3w="trial" ${cs.length ? '' : 'disabled'}>Find</button></span></label>
         <label class="field"><span>What3Words Parking</span><span style="display:flex;gap:6px"><input data-k="w3wParking" value="${esc(L.w3wParking || '')}" placeholder="word.word.word" autocomplete="off" autocapitalize="off"><button type="button" class="small" data-w3w="park" ${pk ? '' : 'disabled'}>Find</button></span></label>
       </div>
-      <p class="small muted" style="margin:0"><b>Find</b> copies the coordinates and opens what3words, so you can read off the three words. Go back to return here – what you typed is kept.</p></section>
+      <p class="small muted" style="margin:0"><b>Find</b> copies the coordinates of the LL corner (or the parking / gate) and opens what3words: paste them into its search bar to get that square's three words. Go back to return here – what you typed is kept.</p></section>
     <section class="card"><h2>Directions</h2>
       <textarea data-k="directions" rows="5" placeholder="e.g. Going up Birmingham Rd (A4141), turn into Manor Ln, then right into School Ln…">${esc(L.directions || '')}</textarea></section>
     <section class="card"><h2>Date &amp; Signature</h2>
@@ -3024,13 +3038,16 @@ function viewLocation(t) {
     t.loc = t.loc || {}; if (v.trim()) t.loc[inp.dataset.k] = v.trim(); else delete t.loc[inp.dataset.k];
     t.updated = Date.now(); save();
   });
-  app.querySelectorAll('[data-w3w]').forEach(b => b.onclick = () => {
-    const p = b.dataset.w3w === 'park' ? pk : ll; if (!p) return;
-    const ll6 = `${fmtCoord(p.lat)},${fmtCoord(p.lon)}`;
-    try { navigator.clipboard && navigator.clipboard.writeText(ll6); } catch (e) {}
-    flushDraft(); location.href = `https://what3words.com/${ll6}`; // opened in place, so no blank page is left behind; Back (or Done) returns here – everything typed is already saved
+  app.querySelectorAll('[data-w3w]').forEach(b => b.onclick = async () => {
+    const park = b.dataset.w3w === 'park', p = park ? pk : ll; if (!p) return;
+    const ll6 = `${fmtCoord(p.lat)}, ${fmtCoord(p.lon)}`, what = park ? 'Parking / Gate' : (p.lab === 'LL' ? 'LL corner' : `corner ${p.n}`);
+    let copied = false; try { if (navigator.clipboard) { await navigator.clipboard.writeText(ll6); copied = true; } } catch (e) {}
+    // what3words has no web link that opens at given coordinates (it shows where you are), so the point is pasted into its search bar
+    if (!confirm(`${what}: ${ll6}\n\n${copied ? 'These coordinates are copied.' : 'Note these coordinates.'} In what3words, tap the search bar, ${copied ? 'paste them' : 'type them in'} and choose the square – its three words are the address for the ${what}.\n\nOpen what3words now?`)) return;
+    flushDraft(); location.href = 'https://what3words.com/'; // opened in place, so no blank page is left behind; Back returns here – everything typed is already saved
   });
   wireCornerPick(app, t, () => viewLocation(t));
+  const cm = document.getElementById('loc-cornmap'); if (cm) cm.innerHTML = trialMapSvg(t, 320, 220);
   wireLocMap(t, 'ov'); wireLocMap(t, 'cu');
   document.getElementById('loc-sig').onclick = () => openSignaturePad(() => viewLocation(t));
   const dIn = app.querySelector('[data-k="date"]');
