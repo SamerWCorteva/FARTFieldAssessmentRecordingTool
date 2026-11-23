@@ -236,6 +236,10 @@ body.locked { overflow:hidden; }
 .cornrow button { min-height:30px; padding:.05rem .5rem; font-size:.78rem; }
 .mappanel .actions { margin:8px 0 0; gap:8px; }
 .mappanel .actions button { min-height:38px; }
+.locmap { position:relative; width:100%; margin:6px 0 10px; background:#dfe7ef; border:1px solid var(--line); border-radius:10px; overflow:hidden; touch-action:none; user-select:none; -webkit-user-select:none; cursor:grab; }
+.locmap svg, .locmap canvas { position:absolute; inset:0; width:100%; height:100%; display:block; }
+#cs-chips .chip { min-height:40px; padding:.2rem .9rem; font-size:.95rem; }
+#cs-chips .chip.on { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
 .minimap { width:100%; max-width:440px; height:auto; display:block; border:1px solid var(--line); border-radius:10px; background:#eef3f8; }
 .gpsready { border-radius:10px; padding:.5rem .7rem; font-weight:700; text-align:center; margin-bottom:8px; font-size:.95rem; line-height:1.3; }
 .gpsready.none { background:var(--line); color:var(--muted); }
@@ -366,7 +370,7 @@ button, a, .chip, label, input[type=checkbox], select, summary { touch-action:ma
 </div>
 <script>
 'use strict';
-const APP_VERSION = 41;
+const APP_VERSION = 42;
 // keep APP_VERSION in step with VERSION in sw.js
 const cap = s => { s = String(s ?? ''); return s.charAt(0).toUpperCase() + s.slice(1); }; // first letter capital, used for titles and headers
 /* ---------- storage ---------- */
@@ -729,13 +733,22 @@ function inScope(t, a, trt) { // is this treatment assessed on this date?
   if (isUtc(t, trt)) return true; // the untreated check is always assessed
   return trtApps(t, trt).some(l => a.apps.includes(l));
 }
-const scopedPlots = (t, a) => plots(t).filter(p => inScope(t, a, p.trt));
+const setOn = (a, si) => !a || !Array.isArray(a.cropSets) || a.cropSets.includes(si || 0); // is this crop / variety assessed on this date? (all of them unless some were chosen)
+const cropsPill = (t, a) => multiSet(t) && Array.isArray(a.cropSets) ? `<span class="pill">Crops: ${esc(setsFor(t, a).map(i => cropSetName(t, i)).join(', '))}</span>` : '';
+const setsFor = (t, a) => (multiSet(t) ? t.sets.map((_, i) => i) : [0]).filter(si => setOn(a, si));
+const scopedPlots = (t, a) => plots(t).filter(p => inScope(t, a, p.trt) && setOn(a, p.set));
 const nPlots = (t, a) => scopedPlots(t, a).length;
 const scopeText = (t, a) => !appLetters(t).length ? '' : !a || !a.apps ? 'All Applications' : `Application${a.apps.length === 1 ? '' : 's'} ${a.apps.join(', ') || '–'}${t.untreated ? ' + Untreated' : ''}`;
 const applies = (t, ty, trt, a) => (!a || inScope(t, a, trt)) && (!ty.untreatedOnly || (!!t.untreated && trt === t.untreated));
 // growth stage (+ size for weeds) is asked for weeds and insect pests, not for diseases
 const isHeight = ty => /height/i.test(ty.name) && !ty.target;
 const isPhyto = ty => !!ty.phyto || /phyto/i.test(ty.name);
+const stageOf = (a, si) => si ? (((a.setBBCH || {})[si]) || {}) : { b: a.cropBBCH, min: a.cropBBCHMin, max: a.cropBBCHMax }; // crop growth stage of one crop / variety (si = its number)
+const cropSetName = (t, i) => setName(t, i) || `Crop ${i + 1}`;
+function stageText(t, a) { // e.g. "32 (31–33)", or "Wheat 32 (31–33) · Barley 25" when the trial has several crops / varieties
+  const one = st => st.b ? `${st.b}${st.min && st.max ? ` (${st.min}–${st.max})` : st.min ? ` (min ${st.min})` : st.max ? ` (max ${st.max})` : ''}` : '–';
+  return multiSet(t) ? setsFor(t, a).map(i => `${cropSetName(t, i)} ${one(stageOf(a, i))}`).join(' · ') : (a.cropBBCH ? one(stageOf(a, 0)) : '');
+}
 const cropParts = t => { const m = /^(.*?)\s*\(([A-Z0-9]+)\)\s*$/.exec(t.crop || ''); return m ? { name: m[1], code: m[2] } : { name: t.crop || '', code: '' }; };
 const needsStage = ty => !!ty.target && (ty.needStage !== undefined ? ty.needStage : ty.kind === 'weed');
 const subsOf = ty => Math.max(1, Math.min(50, parseInt(ty.subs, 10) || 1));
@@ -829,6 +842,7 @@ function render() {
     if (!t) return viewHome();
     if (!p[2]) return viewTrial(t);
     if (p[2] === 'edit') return viewTrialForm(t);
+    if (p[2] === 'location') return viewLocation(t);
     if (p[2] === 'a') {
       if (p[3] === 'new') return viewAssessForm(t, null);
       const a = t.assessments.find(x => x.id === p[3]);
@@ -1094,6 +1108,7 @@ function viewTrialForm(trial) {
       g.cells.forEach((row, r) => row.forEach((c, i) => { if (stored[r][i] !== '' && String(stored[r][i]) !== String(c.rep)) { c.rep = stored[r][i]; c.repManual = true; } }));
       return g;
     }
+    if (dims && dims.across && dims.up) return buildGrid(dims.across, dims.up); // a copied trial: same field size, no plots filled in yet
     return buildGrid(clamp(d.trts, 1, 60), clamp(d.reps, 1, 60));
   }
   const cellErr = (g, cell, r, c) => ({
@@ -1438,10 +1453,10 @@ function viewTrial(t) {
       return `<section class="card visit ${status[2]}">
         <div class="vhead">
           <div><div class="vdate">${esc(dmy(a.date))}</div>
-            <div class="small muted">${[a.assessor, a.cropBBCH ? `BBCH ${a.cropBBCH}${(a.cropBBCHMin || a.cropBBCHMax) ? ` (${a.cropBBCHMin || '–'}–${a.cropBBCHMax || '–'})` : ''}` : ''].filter(Boolean).map(esc).join(' · ')}</div></div>
+            <div class="small muted">${[a.assessor, stageText(t, a) ? `BBCH ${stageText(t, a)}` : ''].filter(Boolean).map(esc).join(' · ')}</div></div>
           <span style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;align-items:center"><span class="pill ${status[1]}">${status[0]}</span><button class="ibtn" data-cmt="${a.id}" type="button" title="Trial comment" aria-label="Trial comment for this date">${ICON.comment}${a.comment ? '<i class="dotmark"></i>' : ''}</button>${canLock ? `<button class="ibtn" data-${a.locked ? 'unlock' : 'lock'}="${a.id}" title="${a.locked ? 'Locked – tap to unlock' : 'Lock this date'}" aria-label="${a.locked ? 'Unlock this date' : 'Lock this date'}" type="button">${a.locked ? ICON.lock : ICON.unlock}</button>` : ''}</span>
         </div>
-        ${(appLetters(t).length || unsaved) ? `<div class="pills" style="margin:0 0 .5rem">${appLetters(t).length ? `<span class="pill">${esc(scopeText(t, a))}</span>` : ''}${unsaved ? '<span class="pill warn">Unsaved Changes</span>' : ''}</div>` : ''}
+        ${(appLetters(t).length || unsaved || cropsPill(t, a)) ? `<div class="pills" style="margin:0 0 .5rem">${appLetters(t).length ? `<span class="pill">${esc(scopeText(t, a))}</span>` : ''}${cropsPill(t, a)}${unsaved ? '<span class="pill warn">Unsaved Changes</span>' : ''}</div>` : ''}
         ${a.types.length ? `<div class="bar"><div style="width:${n ? done / n * 100 : 0}%"></div></div>
           <div class="small muted">${done} of ${n} Plots Complete${miss ? ` · ${miss} Value${miss === 1 ? '' : 's'} Still to Enter` : ''}</div>
           <details class="vlist"><summary>${a.types.length} Assessment${a.types.length === 1 ? '' : 's'}</summary>
@@ -1544,11 +1559,22 @@ function viewAssessForm(t, a, startStep) {
           <label class="field"><span>Assessor</span><input id="a-who" value="${esc(d.assessor)}" placeholder="Initials or name" autocapitalize="characters" autocomplete="off" style="text-transform:uppercase"></label>
         </div>
         <h3>Crop Growth Stage (BBCH)</h3>
+        ${multiSet(t) ? `<p class="small muted" style="margin:-4px 0 6px">This trial has ${t.sets.length} crops / varieties. Choose which ones you are assessing on this date, then enter the stage of each.</p>
+        <h3 class="h3s" style="margin:6px 0 4px">Crops to Assess</h3>
+        <div class="chips" id="cs-chips">${t.sets.map((_, i) => `<button type="button" class="chip" data-cs="${i}">${esc(cropSetName(t, i))}</button>`).join('')}</div>
+        <p class="small muted" id="cs-info" style="margin:.4rem 0 .6rem"></p>` : ''}
+        <div data-setblk="0">${multiSet(t) ? `<h3 class="h3s" style="margin:6px 0 4px">${esc(cropSetName(t, 0))}</h3>` : ''}
         <div class="grid3">
           <label class="field"><span>Majority *</span><input id="a-bbch" inputmode="numeric" value="${esc(d.cropBBCH || '')}" placeholder="e.g. 32" autocomplete="off"></label>
           <label class="field"><span>Minimum</span><input id="a-bbch-min" inputmode="numeric" value="${esc(d.cropBBCHMin || '')}" autocomplete="off"></label>
           <label class="field"><span>Maximum</span><input id="a-bbch-max" inputmode="numeric" value="${esc(d.cropBBCHMax || '')}" autocomplete="off"></label>
-        </div>
+        </div></div>
+        ${multiSet(t) ? t.sets.slice(1).map((_, j) => { const i = j + 1, st = stageOf(d, i); return `<div data-setblk="${i}"><h3 class="h3s" style="margin:6px 0 4px">${esc(cropSetName(t, i))}</h3>
+        <div class="grid3">
+          <label class="field"><span>Majority *</span><input data-sb="${i}" data-sf="b" inputmode="numeric" value="${esc(st.b || '')}" placeholder="e.g. 32" autocomplete="off"></label>
+          <label class="field"><span>Minimum</span><input data-sb="${i}" data-sf="min" inputmode="numeric" value="${esc(st.min || '')}" autocomplete="off"></label>
+          <label class="field"><span>Maximum</span><input data-sb="${i}" data-sf="max" inputmode="numeric" value="${esc(st.max || '')}" autocomplete="off"></label>
+        </div></div>`; }).join('') : ''}
         <label class="field"><span>Notes</span><input id="a-notes" value="${esc(d.notes)}" placeholder="Weather, conditions…"></label>
         <div id="ap-block" ${appLetters(t).length ? '' : 'hidden'}>
           <h3 class="h3s">Plots to Assess</h3>
@@ -1623,6 +1649,25 @@ function viewAssessForm(t, a, startStep) {
     const nPlotsUtc = () => plots(t).filter(p => isUtc(t, p.trt)).length, n = nPlots(t, d), tot = plots(t).length;
     $('ap-info').textContent = sel ? `${n} of ${tot} plots will be assessed on this date${t.untreated ? ' (untreated always included)' : ''}.${n > nPlotsUtc() ? '' : ' Tick at least one application.'}` : `All ${tot} plots will be assessed on this date.`;
   }
+  function drawCrops() { // which crops / varieties are assessed on this date (null = all of them)
+    if (!multiSet(t)) return;
+    if (!Array.isArray(d.cropSets) || !d.cropSets.length) d.cropSets = null;
+    app.querySelectorAll('[data-cs]').forEach(b => b.classList.toggle('on', setOn(d, +b.dataset.cs)));
+    app.querySelectorAll('[data-setblk]').forEach(el => { el.hidden = !setOn(d, +el.dataset.setblk); });
+    const n = setsFor(t, d).length;
+    $('cs-info').textContent = n === t.sets.length ? `All ${n} crops / varieties – ${nPlots(t, d)} plots.` : `${n} of ${t.sets.length} crops / varieties: ${setsFor(t, d).map(i => cropSetName(t, i)).join(', ')} – ${nPlots(t, d)} plots.`;
+    drawScope();
+  }
+  app.querySelectorAll('[data-cs]').forEach(b => b.onclick = () => {
+    const i = +b.dataset.cs, cur = setsFor(t, d);
+    if (cur.includes(i)) {
+      if (cur.length === 1) { toast('Assess at least one crop / variety'); return; }
+      if (editing && scopedPlots(t, d).some(p => (p.set || 0) === i && plotStarted(d, p.plot)) && !confirm(`${cropSetName(t, i)} already has values on this date. Leave it out anyway? The values are kept, but hidden and not exported while it is left out.`)) return;
+      d.cropSets = cur.filter(x => x !== i);
+    } else d.cropSets = [...cur, i].sort((x, y) => x - y);
+    if (d.cropSets.length === t.sets.length) d.cropSets = null;
+    drawCrops(); watch();
+  });
   $('ap-all').onclick = () => { d.apps = null; drawScope(); };
   $('ap-sel').onclick = () => { if (!d.apps) d.apps = []; drawScope(); };
   const watch = () => { if (!finished) queueDraft(key, snap); };
@@ -1643,7 +1688,9 @@ function viewAssessForm(t, a, startStep) {
   function goStep(n) {
     if (n === 2) {
       if (!parseDmy($('a-date').value)) { alert('Please enter the date as DD/MM/YYYY.'); $('a-date').focus(); return; }
-      if (!$('a-bbch').value.trim()) { alert('Please enter the crop growth stage (BBCH) – the majority value.'); $('a-bbch').focus(); return; }
+      if (setOn(d, 0) && !$('a-bbch').value.trim()) { alert(`Please enter the crop growth stage (BBCH)${multiSet(t) ? ' of ' + cropSetName(t, 0) : ''} – the majority value.`); $('a-bbch').focus(); return; }
+      const emptyStage = [...app.querySelectorAll('input[data-sb][data-sf="b"]')].find(inp => setOn(d, +inp.dataset.sb) && !inp.value.trim());
+      if (emptyStage) { alert(`Please enter the crop growth stage (BBCH) of ${cropSetName(t, +emptyStage.dataset.sb)} – the majority value.`); emptyStage.focus(); return; }
     }
     showStep(n);
   }
@@ -1800,11 +1847,17 @@ function viewAssessForm(t, a, startStep) {
   app.querySelectorAll('[data-pt]').forEach(b => b.onclick = () => { const [pi, ti] = b.dataset.pt.split('.').map(Number); toast(addFrom(prevAs[pi].types[ti]) ? 'Added' : 'Already added'); drawTypes(); });
   app.querySelectorAll('[data-pall]').forEach(b => b.onclick = () => { let n = 0; prevAs[+b.dataset.pall].types.forEach(ty => { if (addFrom(ty)) n++; }); drawTypes(); toast(n ? `Added ${n} assessment${n > 1 ? 's' : ''}` : 'Already added'); });
 
+  function readSetStages() { // the growth stage of the 2nd, 3rd… crop / variety
+    const ins = [...app.querySelectorAll('input[data-sb]')]; if (!ins.length) return;
+    const o = {}; ins.forEach(inp => { const i = inp.dataset.sb; (o[i] = o[i] || {})[inp.dataset.sf] = inp.value.trim(); });
+    d.setBBCH = o;
+  }
   function commit(startAfter) {
     d.date = parseDmy($('a-date').value); d.assessor = $('a-who').value.trim().toUpperCase(); d.notes = $('a-notes').value.trim();
-    d.cropBBCH = $('a-bbch').value.trim(); d.cropBBCHMin = $('a-bbch-min').value.trim(); d.cropBBCHMax = $('a-bbch-max').value.trim();
+    d.cropBBCH = $('a-bbch').value.trim(); d.cropBBCHMin = $('a-bbch-min').value.trim(); d.cropBBCHMax = $('a-bbch-max').value.trim(); readSetStages();
     if (!d.date) { showStep(1); alert('Please enter the date as DD/MM/YYYY.'); $('a-date').focus(); return; }
-    if (!d.cropBBCH) { showStep(1); alert('Please enter the crop growth stage (BBCH) – the majority value.'); $('a-bbch').focus(); return; }
+    if (setOn(d, 0) && !d.cropBBCH) { showStep(1); alert(`Please enter the crop growth stage (BBCH)${multiSet(t) ? ' of ' + cropSetName(t, 0) : ''} – the majority value.`); $('a-bbch').focus(); return; }
+    if (multiSet(t)) { const miss = t.sets.findIndex((_, i) => i && setOn(d, i) && !stageOf(d, i).b); if (miss > 0) { showStep(1); alert(`Please enter the crop growth stage (BBCH) of ${cropSetName(t, miss)} – the majority value.`); app.querySelector(`[data-sb="${miss}"][data-sf="b"]`).focus(); return; } }
     const tr = v => String(v ?? '').trim();
     d.types = d.types.map(ty => ({ ...ty, name: tr(ty.name), unit: tr(ty.unit), min: tr(ty.min), max: tr(ty.max), stage: tr(ty.stage), stageMin: tr(ty.stageMin), stageMax: tr(ty.stageMax), sizeH: tr(ty.sizeH), sizeW: tr(ty.sizeW), subs: subsOf(ty), atype: tr(ty.atype) })).filter(ty => ty.name);
     if (startAfter && !d.types.length) { showStep(2); alert('Add at least one assessment first.'); return; }
@@ -1838,12 +1891,12 @@ function viewAssessForm(t, a, startStep) {
   let finished = false;
   const collectFields = () => {
     d.assessor = $('a-who').value.trim().toUpperCase(); d.notes = $('a-notes').value.trim();
-    d.cropBBCH = $('a-bbch').value.trim(); d.cropBBCHMin = $('a-bbch-min').value.trim(); d.cropBBCHMax = $('a-bbch-max').value.trim();
+    d.cropBBCH = $('a-bbch').value.trim(); d.cropBBCHMin = $('a-bbch-min').value.trim(); d.cropBBCHMax = $('a-bbch-max').value.trim(); readSetStages();
     d.date = parseDmy($('a-date').value) || d.date;
   };
   const snap = () => {
     if (finished || !$('a-date')) return null; // the form is already gone
-    collectFields(); if (!editing && !d.cropBBCH && !d.types.length && !d.notes && !d.apps) return null; // nothing worth keeping yet
+    collectFields(); if (!editing && !d.cropBBCH && !Object.values(d.setBBCH || {}).some(x => x.b) && !d.types.length && !d.notes && !d.apps) return null; // nothing worth keeping yet
     const { data, ...rest } = d;
     return { data: { d: JSON.parse(JSON.stringify(rest)), dateTxt: $('a-date').value }, step };
   };
@@ -1854,7 +1907,7 @@ function viewAssessForm(t, a, startStep) {
     if (dirty && !confirm(editing ? 'Discard your changes to this assessment date?' : 'Discard this unfinished assessment date? Everything you entered will be lost.')) return;
     finished = true; dropDraft(key); go(back);
   };
-  drawMenu(); drawBuilder(); drawTypes(); drawScope(); showStep(step);
+  drawMenu(); drawBuilder(); drawTypes(); drawScope(); drawCrops(); showStep(step);
 }
 
 /* ---------- DATA ENTRY (one plot per page) ---------- */
@@ -2093,7 +2146,7 @@ function viewReview(t, a) {
   app.innerHTML = `
   <header class="top"><a class="back" href="#/trial/${t.id}">← ${esc(t.trialId)}</a><h1>Review · ${esc(dmy(a.date))}</h1><a class="brand sm" href="#/" aria-label="FART – back to the home page"><b>FART</b><span>Field Assessment Recording Tool</span></a></header>
   <main>
-    ${appLetters(t).length ? `<div class="pills" style="margin:0 0 .5rem"><span class="pill">${esc(scopeText(t, a))}</span></div>` : ''}
+    ${appLetters(t).length || cropsPill(t, a) ? `<div class="pills" style="margin:0 0 .5rem">${appLetters(t).length ? `<span class="pill">${esc(scopeText(t, a))}</span>` : ''}${cropsPill(t, a)}</div>` : ''}
     <p class="small muted">${done} of ${n} plots complete. These are the raw values (switch the view below). Edit any value directly; tap a plot number to open that plot.</p>
     ${bufferPlots(t).length ? `<p class="small muted">Buffer plots (no values recorded): ${bufferPlots(t).sort((x, y) => x.plot - y.plot).map(b => plotTag(t, b.plot)).join(', ')}</p>` : ''}
     <div class="actions">
@@ -2118,7 +2171,7 @@ function viewReview(t, a) {
         ${byPlot ? plotTable(ty) : `<div class="scroll"><table class="review"><thead><tr>
           <th class="l">Trt</th>${range(t.reps).map(r => `<th>Rep ${r}</th>`).join('')}
         </tr></thead><tbody>
-          ${(multiSet(t) ? t.sets.map((_, i) => i) : [0]).map(si => (multiSet(t) ? `<tr class="setrow"><td colspan="${t.reps + 1}">${esc(setName(t, si))}</td></tr>` : '') + range(t.trts).filter(k => applies(t, ty, k, a)).map(k => `<tr class="${k === t.untreated ? 'utc' : ''}"><td class="l"><b>${k}</b>${k === t.untreated ? ' <span class="muted small">(UTC)</span>' : ''}${trtName(t, k) ? `<span class="tn">${esc(trtName(t, k))}</span>` : ''}</td>
+          ${setsFor(t, a).map(si => (multiSet(t) ? `<tr class="setrow"><td colspan="${t.reps + 1}">${esc(setName(t, si))}</td></tr>` : '') + range(t.trts).filter(k => applies(t, ty, k, a)).map(k => `<tr class="${k === t.untreated ? 'utc' : ''}"><td class="l"><b>${k}</b>${k === t.untreated ? ' <span class="muted small">(UTC)</span>' : ''}${trtName(t, k) ? `<span class="tn">${esc(trtName(t, k))}</span>` : ''}</td>
             ${range(t.reps).map(r => {
               const pl = allPlots.find(q => (q.set || 0) === si && q.rep === r && q.trt === k);
               if (!pl) return `<td class="muted">—</td>`;
@@ -2140,7 +2193,7 @@ function viewReview(t, a) {
     document.getElementById('bp-scale').hidden = !bpOn;
     document.querySelectorAll('#bp-scale [data-sc]').forEach(b => b.classList.toggle('on', b.dataset.sc === sc));
     if (!bpOn) { el.innerHTML = ''; applySel(); return; }
-    el.innerHTML = a.types.map(ty => (multiSet(t) ? t.sets.map((_, i) => i) : [0]).map(si => boxPlotSvg(t, a, ty, selPt, si, sc)).join('')).join('');
+    el.innerHTML = a.types.map(ty => setsFor(t, a).map(si => boxPlotSvg(t, a, ty, selPt, si, sc)).join('')).join('');
     applySel();
   }
   document.getElementById('bp-scale').onclick = e => { const b = e.target.closest('[data-sc]'); if (!b) return; db.settings.bpScale = b.dataset.sc; save(); drawBoxPlots(); };
@@ -2164,7 +2217,7 @@ function viewReview(t, a) {
     const missing = new Set(), flagged = [], spreadKeys = new Set();
     const link = (pl, tid) => `<a href="#" data-cell="${pl}" ${tid ? `data-ty="${tid}"` : ''}>${pn(pl)}</a>`;
     a.types.forEach(ty => {
-      const grp = (multiSet(t) ? t.sets.map((_, i) => i) : [0]).flatMap(si => range(t.trts).filter(k => applies(t, ty, k, a)).map(k => ({ k, si, vs: allPlots.filter(p => p.trt === k && (p.set || 0) === si).map(p => ({ plot: p.plot, n: num(val(a, p.plot, ty.id)) })).filter(v => v.n != null) })));
+      const grp = setsFor(t, a).flatMap(si => range(t.trts).filter(k => applies(t, ty, k, a)).map(k => ({ k, si, vs: allPlots.filter(p => p.trt === k && (p.set || 0) === si).map(p => ({ plot: p.plot, n: num(val(a, p.plot, ty.id)) })).filter(v => v.n != null) })));
       const every = grp.flatMap(g => g.vs.map(v => Math.abs(v.n)));
       const bounded = ty.min !== '' && ty.max !== '' && Number(ty.max) > Number(ty.min);
       const floor = OUTLIER_FLOOR * (bounded ? Number(ty.max) - Number(ty.min) : Math.max(0, ...every));
@@ -2183,7 +2236,7 @@ function viewReview(t, a) {
       });
     });
     a.types.forEach(ty => allPlots.forEach(p => {
-      if (!applies(t, ty, p.trt, a)) return;
+      if (!applies(t, ty, p.trt, a) || !setOn(a, p.set)) return;
       const td = app.querySelector(`td.v[data-plot="${p.plot}"][data-t="${ty.id}"]`); if (!td) return;
       const raw = val(a, p.plot, ty.id), rng = outOfRange(ty, raw);
       td.classList.toggle('miss', raw === '');
@@ -2252,7 +2305,7 @@ const colVal = (c, plot) => c.k === null ? val(c.a, plot, c.ty.id) : ((((c.a.dat
 const exportSig = list => list.map(sigOf).find(Boolean) || null; // signature printed on an export: always the original assessor's
 function excelFile(t, only) {
   const as = (only ? [only] : [...t.assessments]).sort((x, y) => (x.date || '').localeCompare(y.date || '') || x.created - y.created);
-  const ps = plots(t).filter(p => as.some(a => inScope(t, a, p.trt))).sort((x, y) => x.plot - y.plot); // only plots that were assessed on one of these dates
+  const ps = plots(t).filter(p => as.some(a => inScope(t, a, p.trt) && setOn(a, p.set))).sort((x, y) => x.plot - y.plot); // only plots that were assessed on one of these dates
   const hasApps = appLetters(t).length > 0;
   const cell = raw => { const n = num(raw); return n != null ? n : (raw === '' ? null : raw); };
   const cols = expandCols(as).map(c => ({ ...c, label: `${c.label} ${dmy(c.a.date)}` }));
@@ -2263,10 +2316,13 @@ function excelFile(t, only) {
   // assessment details, repeated at the top of the Plot Data and Field Layout sheets
   const detail = (() => {
     const rows = [[B('Trial'), t.trialId, B('Type'), t.type || null, B('Crop'), cp.name || null, B('Crop code'), cp.code || null, B('Reps × Trts'), `${t.reps} × ${t.trts}`, ...(hasApps ? [B('Applications'), appLetters(t).length] : [])]];
-    const gc = geoPts(t);
-    if (gc.length) rows.push([B('Trial corners (WGS84)'), ...gc.map(c => `${c.n}) ${fmtCoord(c.lat)}, ${fmtCoord(c.lon)}${c.acc ? ` (±${Math.round(c.acc)} m)` : ''}`), B('Accuracy'), `Phone GPS ${geoAccRange(gc)}, not survey grade`.replace('  ', ' ')]);
+    const gc = geoLabelled(t);
+    if (gc.length) rows.push([B('Trial corners (WGS84)'), ...gc.map(c => `${c.lab}: ${fmtCoord(c.lat)}, ${fmtCoord(c.lon)}${c.acc ? ` (±${Math.round(c.acc)} m)` : ''}`), B('Accuracy'), `Phone GPS ${geoAccRange(gc)}`.trim()]);
     as.forEach(a => {
-      rows.push([B('Assessment date'), dmy(a.date), B('Assessor'), a.assessor || null, B('Crop GS (BBCH) majority'), a.cropBBCH || null, B('Min'), a.cropBBCHMin || null, B('Max'), a.cropBBCHMax || null, B('Notes'), a.notes || null]);
+      const sets = setsFor(t, a), s0 = stageOf(a, sets[0] || 0);
+      rows.push([B('Assessment date'), dmy(a.date), B('Assessor'), a.assessor || null, B(ms ? `Crop GS (BBCH) majority – ${cropSetName(t, sets[0] || 0)}` : 'Crop GS (BBCH) majority'), s0.b || null, B('Min'), s0.min || null, B('Max'), s0.max || null, B('Notes'), a.notes || null]);
+      if (ms) sets.slice(1).forEach(i => { const st = stageOf(a, i); rows.push([null, null, null, null, B(`Crop GS (BBCH) majority – ${cropSetName(t, i)}`), st.b || null, B('Min'), st.min || null, B('Max'), st.max || null]); });
+      if (ms && sets.length < t.sets.length) rows.push([null, B('Crops assessed'), sets.map(i => cropSetName(t, i)).join(', ')]);
       const seenT = new Set();
       a.types.filter(needsStage).forEach(ty => {
         const k = ty.kind + ':' + ty.target; if (seenT.has(k)) return; seenT.add(k);
@@ -2282,13 +2338,13 @@ function excelFile(t, only) {
   // 1. Plot data (wide) – raw values as recorded
   const wide = [...detail, [], [...['Plot', 'Rep', 'Trt', 'Treatment', ...(hasApps ? ['Applications'] : []), 'Crop', 'Crop code', ...(ms ? ['Crop/Variety'] : [])].map(B), ...cols.map(c => B(c.label)), ...noteCols.map(a => B(`Notes ${dmy(a.date)}`))]];
   [...ps.map(p => ({ p })), ...bufferPlots(t).map(b => ({ b }))].sort((x, y) => (x.p || x.b).plot - (y.p || y.b).plot).forEach(({ p, b }) => b ? wide.push([pn(b.plot), b.rep || null, null, 'Buffer', ...(hasApps ? [null] : []), cp.name || null, cp.code || null, ...(ms ? [setName(t, b.set)] : []), ...cols.map(() => 'Buffer'), ...noteCols.map(() => null)]) : wide.push([pn(p.plot), p.rep, p.trt, trtName(t, p.trt) || null, ...(hasApps ? [trtApps(t, p.trt).join(', ') || null] : []), cp.name || null, cp.code || null, ...(ms ? [setName(t, p.set)] : []),
-    ...cols.map(c => applies(t, c.ty, p.trt, c.a) ? cell(colVal(c, p.plot)) : null), ...noteCols.map(a => (a.data[p.plot] && a.data[p.plot]._note) || null)]));
+    ...cols.map(c => applies(t, c.ty, p.trt, c.a) && setOn(c.a, p.set) ? cell(colVal(c, p.plot)) : null), ...noteCols.map(a => (a.data[p.plot] && a.data[p.plot]._note) || null)]));
 
   // 2. Long format (one row per recorded value, one per subsample — good for pivot tables, R, ARM import)
   const long = [['Trial', 'Crop', 'Crop code', ...(ms ? ['Crop/Variety'] : []), 'Plot', 'Rep', 'Trt', 'Treatment', 'Untreated', 'Date', 'Assessor', 'Crop BBCH (majority)', 'Crop BBCH min', 'Crop BBCH max', 'Assessment', 'Assessment type', 'Target', 'Target stage (majority)', 'Target stage min', 'Target stage max', 'Weed height', 'Weed width', 'Weed size unit', 'Leaf level', 'Subsample', 'Unit', 'Value', 'Plot note', ...(hasApps ? ['Applications assessed'] : [])].map(B)];
   as.forEach(a => ps.forEach(p => expandCols([a]).forEach(c => {
-    const ty = c.ty; if (!applies(t, ty, p.trt, a)) return;
-    long.push([t.trialId, cp.name || null, cp.code || null, ...(ms ? [setName(t, p.set)] : []), pn(p.plot), p.rep, p.trt, trtName(t, p.trt) || null, p.trt === t.untreated ? 'Yes' : null, dmy(a.date), a.assessor || null, a.cropBBCH || null, a.cropBBCHMin || null, a.cropBBCHMax || null, ty.name, ty.atype || null, ty.target || null, ty.stage || null, ty.stageMin || null, ty.stageMax || null, ty.sizeH || null, ty.sizeW || null, (ty.sizeH || ty.sizeW) ? (ty.sizeUnit || 'cm') : null, ty.leaf || null, c.k === null ? null : c.k + 1, ty.unit || null, cell(colVal(c, p.plot)), (a.data[p.plot] && a.data[p.plot]._note) || null, ...(hasApps ? [scopeText(t, a)] : [])]);
+    const ty = c.ty; if (!applies(t, ty, p.trt, a) || !setOn(a, p.set)) return;
+    long.push([t.trialId, cp.name || null, cp.code || null, ...(ms ? [setName(t, p.set)] : []), pn(p.plot), p.rep, p.trt, trtName(t, p.trt) || null, p.trt === t.untreated ? 'Yes' : null, dmy(a.date), a.assessor || null, stageOf(a, p.set || 0).b || null, stageOf(a, p.set || 0).min || null, stageOf(a, p.set || 0).max || null, ty.name, ty.atype || null, ty.target || null, ty.stage || null, ty.stageMin || null, ty.stageMax || null, ty.sizeH || null, ty.sizeW || null, (ty.sizeH || ty.sizeW) ? (ty.sizeUnit || 'cm') : null, ty.leaf || null, c.k === null ? null : c.k + 1, ty.unit || null, cell(colVal(c, p.plot)), (a.data[p.plot] && a.data[p.plot]._note) || null, ...(hasApps ? [scopeText(t, a)] : [])]);
   })));
 
   // 3. Field layout
@@ -2310,10 +2366,10 @@ function excelFile(t, only) {
     [B('Plots'), plotCount(t)], ...(hasApps ? [[B('Applications'), appLetters(t).length]] : []), [B('Buffer plots'), bufferPlots(t).length || null], [B('Randomization'), isCustom(t) ? 'Custom randomization' : 'Regular RCB'], [B('Plot numbering'), isCustom(t) ? 'Custom' : t.numbering === 'seq' ? 'Sequential' : 'By rep (101, 201…)'],
     [B('Exported'), new Date().toLocaleString('en-GB')], [B('NA'), 'Plot not assessed'], [], [B('Trt'), B('Treatment name'), ...(hasApps ? [B('Applications')] : [])], ...range(t.trts).map(k => [k, trtName(t, k) || null, ...(hasApps ? [trtApps(t, k).join(', ') || null] : [])]),
     [], [B('Date'), B('Assessor'), B('Crop BBCH (majority)'), B('BBCH min'), B('BBCH max'), B('Assessment types'), B('Plots complete'), B('Notes'), ...(hasApps ? [B('Applications assessed')] : [])],
-    ...as.map(a => [dmy(a.date), a.assessor || null, a.cropBBCH || null, a.cropBBCHMin || null, a.cropBBCHMax || null, a.types.map(typeLabel).join('; '), `${countDone(t, a)} / ${nPlots(t, a)}`, a.notes || null, ...(hasApps ? [scopeText(t, a)] : [])])];
+    ...as.map(a => [dmy(a.date), a.assessor || null, ...(ms ? [stageText(t, a) || null, null, null] : [a.cropBBCH || null, a.cropBBCHMin || null, a.cropBBCHMax || null]), a.types.map(typeLabel).join('; '), `${countDone(t, a)} / ${nPlots(t, a)}`, a.notes || null, ...(hasApps ? [scopeText(t, a)] : [])])];
   if (as.some(a => a.comment)) info.push([], [B('Trial comments (by assessment date)')], [B('Date'), B('Comment')], ...as.filter(a => a.comment).map(a => [dmy(a.date), a.comment]));
   if (as.some(a => (a.unlockLog || []).length)) info.push([], [B('Data changes after unlocking')], [B('Date'), B('Unlocked'), B('By'), B('Locked again'), B('Reason for change')], ...as.flatMap(a => (a.unlockLog || []).map(l => [dmy(a.date), dtTxt(l.ts), l.who || null, l.relocked ? dtTxt(l.relocked) : 'Not locked again', l.reason])));
-  if (geoPts(t).length) info.push([], [B('Trial corner coordinates (WGS84, decimal degrees)')], [B('Corner'), B('Latitude'), B('Longitude'), B('GPS accuracy (m)')], ...geoPts(t).map(c => [c.n, +fmtCoord(c.lat), +fmtCoord(c.lon), c.acc ? Math.round(c.acc) : null]), [B('Accuracy'), GEO_NOTE]);
+  if (geoLabelled(t).length) info.push([], [B('Trial corner coordinates (WGS84, decimal degrees)')], [B('Corner'), B('Latitude'), B('Longitude'), B('GPS accuracy (m)')], ...geoLabelled(t).map(c => [CORNER_NAME[c.lab] ? `${CORNER_NAME[c.lab]} (${c.n})` : c.n, +fmtCoord(c.lat), +fmtCoord(c.lon), c.acc ? Math.round(c.acc) : null]), [B('Accuracy'), GEO_NOTE]);
 
   const blob = buildXlsx([
     { name: 'Plot Data', rows: wide, freeze: detail.length <= 5 ? detail.length + 2 : false },
@@ -2393,7 +2449,7 @@ function pdfFile(t, list) {
     { s: `${t.trialId} – Assessment ${dmy(a.date)}`, size: 11, bold: true },
     { s: [t.type, cropTxt, repsTxt].filter(Boolean).join('  ·  '), size: 8 },
     ...geoHdr,
-    { s: `Assessor: ${a.assessor || '–'}    Crop growth stage (BBCH): ${rng(a.cropBBCH || '–', a.cropBBCHMin, a.cropBBCHMax)}${appLetters(t).length ? '    Applications assessed: ' + scopeText(t, a) : ''}${a.notes ? '    Notes: ' + a.notes : ''}`, size: 8 },
+    { s: `Assessor: ${a.assessor || '–'}    Crop growth stage (BBCH): ${multiSet(t) ? stageText(t, a) : rng(a.cropBBCH || '–', a.cropBBCHMin, a.cropBBCHMax)}${appLetters(t).length ? '    Applications assessed: ' + scopeText(t, a) : ''}${a.notes ? '    Notes: ' + a.notes : ''}`, size: 8 },
     ...wrapText('Assessments: ' + a.types.map(assessDesc).join('  •  '), W - 2 * M, 7, 4).map(s => ({ s, size: 7 })),
   ];
   sorted.forEach(a => {
@@ -2413,7 +2469,7 @@ function pdfFile(t, list) {
     const notes = Object.entries(a.data).filter(([, r]) => r._note).sort((x, y2) => x[0] - y2[0]);
     if (notes.length) { ensure(40); line('Plot Notes', 11, true, 3); notes.forEach(([pl, r]) => line(`Plot ${plotTag(t, +pl)}: ${r._note}`, 9, false, 2)); }
     newPage(); line(`Treatment Tables – ${dmy(a.date)}`, 12, true, 4);
-    a.types.forEach(ty => (ms ? t.sets.map((_, i) => i) : [0]).forEach(si => {
+    a.types.forEach(ty => setsFor(t, a).forEach(si => {
       const ks = range(t.trts).filter(k => applies(t, ty, k, a));
       ensure(60); line(typeLabel(ty) + (ty.untreatedOnly ? '  (Untreated plots only)' : '') + (ms ? ' – ' + setName(t, si) : ''), 11, true, 3);
       const repW = Math.max(30, Math.min(80, (W - 2 * M - 170) / t.reps));
@@ -2488,10 +2544,10 @@ function pdfFile(t, list) {
 
 /* ---------- share a trial with another device ---------- */
 function stampOwn(t) { let n = 0; t.assessments.forEach(a => { if (!a.device) { stampAssessment(a); n++; } }); if (n) save(); } // dates made before signatures existed belong to this device, so mark them before they leave it
-function copyTrial(t) { // a new trial with the same setup (layout, randomization, treatments, applications); no dates, data, comments or GPS corners
+function copyTrial(t) { // a new trial with the same setup, opened in Add Trial to fill in the randomization; nothing else is carried over
   let id = `${t.trialId}-COPY`;
   for (;;) {
-    const v = prompt(`Copy the setup of ${t.trialId} into a new trial.\n\nThe plot layout, randomization, treatments and trial details are copied. Assessment dates, data, comments and GPS corners are not.\n\nNew Trial ID:`, id);
+    const v = prompt(`Copy the setup of ${t.trialId} into a new trial.\n\nCopied: trial details, crop, reps, treatments, applications and plot layout size.\nNot copied: the randomization (you fill it in next), assessment dates, data, comments, GPS corners and the location sheet.\n\nNew Trial ID:`, id);
     if (v === null) return;
     id = v.trim().toUpperCase();
     if (!id) { alert('Please enter a Trial ID for the new trial.'); continue; }
@@ -2499,10 +2555,15 @@ function copyTrial(t) { // a new trial with the same setup (layout, randomizatio
     if (db.trials.some(x => x.trialId.toLowerCase() === id.toLowerCase()) && !confirm(`A trial called "${id}" already exists. Use this Trial ID anyway?`)) continue;
     break;
   }
-  const c = JSON.parse(JSON.stringify(t));
-  Object.assign(c, { id: uid(), trialId: id, assessments: [], created: Date.now(), updated: Date.now() });
-  delete c.geo; delete c.archived;
-  db.trials.push(c); save(); toast(`${id} created – a copy of ${t.trialId}`); go(`#/trial/${c.id}`);
+  if (getDraft('trial:new') && !confirm('You have an unfinished new trial. Replace it with this copy?')) return;
+  const src = JSON.parse(JSON.stringify(t));
+  const { assessments, geo, loc, archived, updated, layout, plotList, grid, sets, ...keep } = src;
+  const d = { ...keep, id: uid(), trialId: id, created: Date.now(), layout: null, plotList: [],
+    sets: (sets && sets.length ? sets : [{ name: '', grid }]).map(x => ({ name: x.name || '', dims: x.grid || x.dims || null, grid: null })) }; // same crops / varieties and field size, no plots filled in
+  dropDraft('trial:new');
+  db.drafts = db.drafts || {}; db.drafts['trial:new'] = { data: { d, ui: { cur: 0, layer: 'plot' } }, step: 1, saved: Date.now() }; persistQuiet();
+  toast(`Copy of ${t.trialId} – check the details, then fill in the randomization and save`);
+  go('#/trial/new');
 }
 function shareTrial(t) { // the whole trial (layout, assessments and values) as one small file
   stampOwn(t);
@@ -2600,8 +2661,24 @@ function areaM2(pts) { // shoelace on local metres
 }
 const fmtCoord = n => n.toFixed(6);
 const fmtM = m => m >= 1000 ? (m / 1000).toFixed(2) + ' km' : (m >= 100 ? Math.round(m) : m.toFixed(1)) + ' m';
-const geoPts = t => ((t.geo && t.geo.corners) || []).map((c, i) => c ? { ...c, n: i + 1 } : null).filter(Boolean);
-const geoCopyText = t => geoPts(t).map(c => `Corner ${c.n}: ${fmtCoord(c.lat)}, ${fmtCoord(c.lon)}${c.acc ? ` (±${Math.round(c.acc)} m)` : ''}`).join('\n');
+const CORNER_ORDER = ['LL', 'UL', 'UR', 'LR'], CORNER_NAME = { LL: 'Lower Left', UL: 'Upper Left', UR: 'Upper Right', LR: 'Lower Right' };
+function autoLabels(t) { // a first guess at which corner is which, from where it sits on a north-up map (the user confirms or changes it)
+  const cs = (t.geo && t.geo.corners) || [], out = [0, 1, 2, 3].map(i => String(i + 1));
+  if ([0, 1, 2, 3].some(i => !cs[i])) return out;
+  const lat0 = (cs[0].lat + cs[1].lat + cs[2].lat + cs[3].lat) / 4, k = Math.cos(lat0 * Math.PI / 180);
+  const s = [0, 1, 2, 3].map(i => ({ i, x: cs[i].lon * k, y: cs[i].lat })).sort((a, b) => a.y - b.y);
+  const lo = s.slice(0, 2).sort((a, b) => a.x - b.x), hi = s.slice(2).sort((a, b) => a.x - b.x);
+  out[lo[0].i] = 'LL'; out[lo[1].i] = 'LR'; out[hi[0].i] = 'UL'; out[hi[1].i] = 'UR';
+  return out;
+}
+function cornerLabs(t) { // LL / UL / UR / LR for each corner number: what the user chose, otherwise the guess from the map
+  const st = t.geo && t.geo.labels;
+  return st && st.length === 4 && CORNER_ORDER.every(l => st.includes(l)) && [0, 1, 2, 3].every(i => t.geo.corners[i]) ? st : autoLabels(t);
+}
+const geoPts = t => { const lab = cornerLabs(t); return ((t.geo && t.geo.corners) || []).map((c, i) => c ? { ...c, n: i + 1, lab: lab[i] } : null).filter(Boolean); }; // corners 1–4 in the order they were walked (= the way round the outline)
+const geoLabelled = t => { const cs = geoPts(t); return cs.length === 4 ? CORNER_ORDER.map(l => cs.find(c => c.lab === l)) : cs; }; // LL, UL, UR, LR order, for exports
+const geoParking = t => (t.geo && t.geo.parking) || null;
+const geoCopyText = t => [...geoLabelled(t).map(c => `${c.lab === String(c.n) ? 'Corner ' + c.n : `${CORNER_NAME[c.lab]} (corner ${c.n})`}: ${fmtCoord(c.lat)}, ${fmtCoord(c.lon)}${c.acc ? ` (±${Math.round(c.acc)} m)` : ''}`), ...(geoParking(t) ? [`Parking / Gate: ${fmtCoord(geoParking(t).lat)}, ${fmtCoord(geoParking(t).lon)}`] : [])].join('\n');
 function fitView(pts, W, H, pad) { // a map view (centre + pixels per map unit) that holds all the points
   const xs = pts.map(p => mercX(p.lon)), ys = pts.map(p => mercY(p.lat)), lat = pts.reduce((s, p) => s + p.lat, 0) / pts.length;
   const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys), minSpan = 40 / worldM(lat); // never tighter than ~40 m
@@ -2627,31 +2704,47 @@ function outlineSvg(v, cs, light) { // the trial outline with numbered corners
   let s = '';
   if (P.length >= 3) s += `<polygon points="${pts}" fill="${col}" fill-opacity=".22" stroke="${col}" stroke-width="3" stroke-linejoin="round"/>`;
   else if (P.length === 2) s += `<polyline points="${pts}" fill="none" stroke="${col}" stroke-width="3"/>`;
-  P.forEach((q, i) => { s += `<circle cx="${q[0].toFixed(1)}" cy="${q[1].toFixed(1)}" r="11" fill="${light ? '#0072CE' : '#fff'}" stroke="${light ? '#fff' : '#000'}" stroke-width="2"/><text x="${q[0].toFixed(1)}" y="${(q[1] + 4.5).toFixed(1)}" text-anchor="middle" font-size="13" font-weight="700" fill="${light ? '#fff' : '#000'}">${cs[i].n}</text>`; });
+  P.forEach((q, i) => { s += `<circle cx="${q[0].toFixed(1)}" cy="${q[1].toFixed(1)}" r="12" fill="${light ? '#0072CE' : '#fff'}" stroke="${light ? '#fff' : '#000'}" stroke-width="2"/><text x="${q[0].toFixed(1)}" y="${(q[1] + 4.5).toFixed(1)}" text-anchor="middle" font-size="13" font-weight="700" fill="${light ? '#fff' : '#000'}">${cs[i].n}</text>`; });
   return s;
 }
-const GEO_NOTE = "Coordinates are WGS84 decimal degrees taken from the phone's GPS. The ± value next to each corner is the GPS's own accuracy estimate at the moment it was recorded (roughly a 2-in-3 chance the true corner lies within that distance). Phone GPS is usually good to about 3–10 m in open ground, and worse near trees, buildings or in poor weather. Use these to find and map the trial, not as a land survey.";
+const GEO_NOTE = "Phone GPS coordinates (WGS84). The ± value is the GPS's accuracy when each point was recorded – usually 3–10 m in open ground, less near trees or buildings.";
 const geoAccRange = cs => { const a = cs.map(c => Math.round(c.acc || 0)).filter(Boolean); if (!a.length) return ''; const lo = Math.min(...a), hi = Math.max(...a); return lo === hi ? `±${lo} m` : `±${lo}–${hi} m`; };
-const geoHeaderTxt = t => { const cs = geoPts(t); if (!cs.length) return ''; const r = geoAccRange(cs); return `Trial corners (WGS84, phone GPS${r ? ' ' + r : ''}, not survey grade): ${cs.map(c => `${c.n}) ${fmtCoord(c.lat)}, ${fmtCoord(c.lon)}`).join('    ')}`; };
+const geoHeaderTxt = t => { const cs = geoLabelled(t); if (!cs.length) return ''; const r = geoAccRange(cs); return `Trial corners (WGS84, phone GPS${r ? ' ' + r : ''}): ${cs.map(c => `${c.lab}: ${fmtCoord(c.lat)}, ${fmtCoord(c.lon)}`).join('    ')}`; };
+const parkSvg = (v, p) => { const [x, y] = scr(v, p); return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="13" fill="#e8590c" stroke="#fff" stroke-width="2.5"/><text x="${x.toFixed(1)}" y="${(y + 5).toFixed(1)}" text-anchor="middle" font-size="14" font-weight="800" fill="#fff">P</text>`; };
+function cornerRowsHtml(t) { // corner numbers with their coordinates; with all 4 in, choose which one is LL / UL / UR / LR
+  const cs = geoPts(t), pk = geoParking(t), pick = cs.length === 4, chosen = !!(t.geo && t.geo.labels);
+  return (pick ? `<p class="small" style="margin:0 0 4px"><b>Which corner is which?</b> <span class="muted">${chosen ? 'LL Lower Left · UL Upper Left · UR Upper Right · LR Lower Right.' : 'Suggested from the map (north at the top) – check each one and change it if needed.'}</span></p>` : '')
+    + cs.map(c => `<div class="cornrow"><span class="cn">${c.n}</span><span class="cc">${fmtCoord(c.lat)}, ${fmtCoord(c.lon)}${c.acc ? ` <span class="muted small">±${Math.round(c.acc)} m</span>` : ''}</span>${pick ? `<select data-cl="${c.n - 1}" aria-label="Corner ${c.n} is" style="width:auto;min-height:34px;padding:.1rem .4rem;flex:none">${CORNER_ORDER.map(l => `<option value="${l}" ${c.lab === l ? 'selected' : ''}>${l}</option>`).join('')}</select>` : ''}</div>`).join('')
+    + (pk ? `<div class="cornrow"><span class="cn" style="background:#e8590c">P</span><span class="cc">${fmtCoord(pk.lat)}, ${fmtCoord(pk.lon)} <span class="muted small">Parking / Gate</span></span></div>` : '');
+}
+function wireCornerPick(root, t, again) {
+  root.querySelectorAll('select[data-cl]').forEach(sel => sel.onchange = () => {
+    const labs = cornerLabs(t).slice(), i = +sel.dataset.cl, j = labs.indexOf(sel.value);
+    if (j >= 0 && j !== i) labs[j] = labs[i]; // the two corners swap names, so each name is used once
+    labs[i] = sel.value; t.geo.labels = labs; t.updated = Date.now(); save(); again();
+  });
+}
 function geoCardHtml(t) {
-  const cs = geoPts(t), n = cs.length;
+  const cs = geoPts(t), n = cs.length, pk = geoParking(t), first = cs[0] || pk;
   const info = n === 4 ? `Sides: ${[[0, 1], [1, 2], [2, 3], [3, 0]].map(([i, j]) => fmtM(distM(cs[i], cs[j]))).join(' · ')} · Area ≈ ${Math.round(areaM2(cs)).toLocaleString('en-GB')} m²` : '';
   return `<div class="arow"><h2 style="margin:0">Trial Location</h2><button id="geo-walk" type="button" class="primary small">${n ? 'Walk the Trial Again' : 'Walk the Trial'}</button></div>
-    ${n ? `<svg class="minimap" id="geo-mini" viewBox="0 0 320 200" style="margin-top:10px;cursor:zoom-in" role="button" tabindex="0" aria-label="Outline of the trial – tap to open the map full screen"></svg>
+    ${first ? `<svg class="minimap" id="geo-mini" viewBox="0 0 320 200" style="margin-top:10px;cursor:zoom-in" role="button" tabindex="0" aria-label="Outline of the trial – tap to open the map full screen"></svg>
       <p class="small muted" style="margin:4px 0 0">Tap the map to open it full screen, where you can pinch to zoom.</p>
-      <div style="margin-top:8px">${cs.map(c => `<div class="cornrow"><span class="cn">${c.n}</span><span class="cc">${fmtCoord(c.lat)}, ${fmtCoord(c.lon)}${c.acc ? ` <span class="muted small">±${Math.round(c.acc)} m</span>` : ''}</span></div>`).join('')}</div>
+      <div style="margin-top:8px">${cornerRowsHtml(t)}</div>
       ${info ? `<p class="small muted" style="margin:6px 0 0">${esc(info)}</p>` : ''}
       <p class="small muted" style="margin:6px 0 0"><b>Accuracy:</b> ${esc(GEO_NOTE)}</p>
-      <div class="actions" style="margin:10px 0 0"><button id="geo-copy" type="button" class="small">Copy Coordinates</button><a class="btn small" target="_blank" rel="noopener" href="https://www.google.com/maps?q=${cs[0].lat},${cs[0].lon}">Open Corner ${cs[0].n} in Maps</a><button id="geo-clear" type="button" class="small">Clear</button></div>`
-    : `<p class="small muted" style="margin:6px 0 0">Walk around the trial and record each of its 4 corners. You will see where you are on a map, the outline of the trial, and the coordinates of every corner. Needs location permission; the satellite background needs a connection, the rest works offline.</p>`}`;
+      <div class="actions" style="margin:10px 0 0"><a class="btn primary small" href="#/trial/${t.id}/location">Location Sheet…</a><button id="geo-copy" type="button" class="small">Copy Coordinates</button><a class="btn small" target="_blank" rel="noopener" href="https://www.google.com/maps?q=${first.lat},${first.lon}">Open in Maps</a><button id="geo-clear" type="button" class="small">Clear</button></div>`
+    : `<p class="small muted" style="margin:6px 0 0">Walk around the trial and record each of its 4 corners, and the parking / gate. You will see where you are on a map, the outline of the trial, and the coordinates of every corner. These fill in the Location Sheet. Needs location permission; the satellite background needs a connection, the rest works offline.</p>
+      <div class="actions" style="margin:10px 0 0"><a class="btn small" href="#/trial/${t.id}/location">Location Sheet…</a></div>`}`;
 }
 function wireGeoCard(t, again) {
+  const card = document.getElementById('geo-card'); if (card) wireCornerPick(card, t, again);
   const w = document.getElementById('geo-walk'); if (!w) return;
   w.onclick = () => openTrialMap(t, again);
-  const mini = document.getElementById('geo-mini'), cs = geoPts(t);
-  if (mini && cs.length) { // the same map as the walk screen (satellite / street when online, plain when offline)
-    const st = db.settings.mapStyle || 'sat', sat = st !== 'none', v = fitView(cs, 320, 200, 0.7);
-    mini.innerHTML = tilesSvg(v, st) + outlineSvg(v, cs, !sat) + `<text x="8" y="16" font-size="12" font-weight="700" fill="${sat ? '#fff' : '#5a6877'}" style="${sat ? 'paint-order:stroke;stroke:#000;stroke-width:3px;' : ''}">N ↑</text>`
+  const mini = document.getElementById('geo-mini'), cs = geoPts(t), pk = geoParking(t);
+  if (mini && (cs.length || pk)) { // the same map as the walk screen (satellite / street when online, plain when offline)
+    const st = db.settings.mapStyle || 'sat', sat = st !== 'none', v = fitView([...cs, ...(pk ? [pk] : [])], 320, 200, 0.7);
+    mini.innerHTML = tilesSvg(v, st) + outlineSvg(v, cs, !sat) + (pk ? parkSvg(v, pk) : '') + `<text x="8" y="16" font-size="12" font-weight="700" fill="${sat ? '#fff' : '#5a6877'}" style="${sat ? 'paint-order:stroke;stroke:#000;stroke-width:3px;' : ''}">N ↑</text>`
       + (st === 'sat' ? '<text x="312" y="195" text-anchor="end" font-size="8" fill="#fff" style="paint-order:stroke;stroke:#000;stroke-width:2px;">Imagery © Esri</text>' : st === 'map' ? '<text x="312" y="195" text-anchor="end" font-size="8" fill="#222" style="paint-order:stroke;stroke:#fff;stroke-width:2px;">© OpenStreetMap</text>' : '');
     mini.onclick = () => openTrialMap(t, again);
     mini.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTrialMap(t, again); } };
@@ -2689,9 +2782,9 @@ function tilesUpdate(g, v, style) {
   prune();
 }
 /* one finger drags, two fingers pinch, double-tap or mouse wheel zooms. get() gives the view, set(v) shows a new one */
-function panZoom(el, get, set) {
+function panZoom(el, get, set, unit) { // unit() = view units per screen pixel, for a map drawn in a scaled box
   const pts = new Map(); let last = null, lastTap = 0;
-  const rel = e => { const r = el.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  const rel = e => { const r = el.getBoundingClientRect(), u = unit ? unit() : 1; return [(e.clientX - r.left) * u, (e.clientY - r.top) * u]; };
   const zoomAt = (v, mx, my, f) => { const k = clamp(v.k * f, 256 * 2 ** 4, 256 * 2 ** 22), wx = v.cx + (mx - v.W / 2) / v.k, wy = v.cy + (my - v.H / 2) / v.k; return { ...v, k, cx: wx - (mx - v.W / 2) / k, cy: wy - (my - v.H / 2) / k }; };
   const now = () => { const a = [...pts.values()]; if (a.length < 2) return { m: a[0], d: 0 }; const [p, q] = a; return { m: [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2], d: Math.hypot(p[0] - q[0], p[1] - q[1]) }; };
   el.addEventListener('pointerdown', e => {
@@ -2730,7 +2823,7 @@ function openTrialMap(t, after) {
 
   function draw() {
     const W = wrap.clientWidth, H = wrap.clientHeight; if (!W || !H) return;
-    const cs = geoPts(t), near = pos && (!cs.length || distM(pos, cs[0]) < 3000), must = [...cs, ...(near ? [pos] : [])];
+    const cs = geoPts(t), pk = geoParking(t), ref = cs[0] || pk, near = pos && (!ref || distM(pos, ref) < 3000), must = [...cs, ...(pk ? [pk] : []), ...(near ? [pos] : [])];
     msgEl.textContent = must.length || manual ? '' : (err || 'Waiting for a GPS position…');
     if (!must.length && !view) { svgT.innerHTML = ''; svgD.innerHTML = ''; return; }
     if (manual && view) { if (view.W !== W || view.H !== H) view = { ...view, W, H }; }
@@ -2740,7 +2833,7 @@ function openTrialMap(t, after) {
     }
     tilesUpdate(svgT, view, style);
     const sat = style !== 'none';
-    let s = outlineSvg(view, cs, !sat);
+    let s = outlineSvg(view, cs, !sat) + (pk ? parkSvg(view, pk) : '');
     if (trail.length > 1) s = `<polyline points="${trail.map(p => scr(view, p).map(x => x.toFixed(1)).join(',')).join(' ')}" fill="none" stroke="${sat ? '#fff' : '#7a8a9a'}" stroke-width="2" stroke-dasharray="2 5" stroke-linecap="round"/>` + s;
     if (pos) {
       const [px, py] = scr(view, pos), mpp0 = worldM(view.lat) / view.k, ar = Math.max(6, (pos.acc || 0) / mpp0);
@@ -2770,29 +2863,34 @@ function openTrialMap(t, after) {
     const r = readiness(), el = q('#mp-ready'), b = q('#mp-mark');
     if (el) { el.textContent = r.txt; el.className = 'gpsready ' + r.s; }
     if (b) { b.classList.toggle('primary', r.s === 'ready'); b.disabled = !pos; }
+    const pb = q('#mp-park'); if (pb) pb.disabled = !pos;
     return r;
   }
   function panel() {
-    const cs = corners(), nx = nextCorner(), have = geoPts(t);
+    const cs = corners(), nx = nextCorner(), have = geoPts(t), pk = geoParking(t);
     const sideTxt = have.length === 4 ? `<p class="small muted" style="margin:6px 0 0">Sides: ${[[0, 1], [1, 2], [2, 3], [3, 0]].map(([i, j]) => fmtM(distM(have[i], have[j]))).join(' · ')} · Area ≈ ${Math.round(areaM2(have)).toLocaleString('en-GB')} m²</p>` : '';
     q('#mp-panel').innerHTML = `<div class="gpsready none" id="mp-ready"></div>
       ${nx >= 0 ? `<button type="button" class="mark" id="mp-mark" disabled>Record Corner ${nx + 1} Here</button>` : `<div class="pill ok" style="display:block;text-align:center;padding:.5rem">All 4 corners recorded</div>`}
-      <div class="actions">${have.length ? '<button type="button" class="small" id="mp-copy">Copy Coordinates</button><button type="button" class="small" id="mp-clear">Clear All</button>' : ''}<button type="button" class="small primary" id="mp-save">Done</button></div>
-      <div style="margin-top:6px">${[0, 1, 2, 3].map(i => { const c = cs[i]; return `<div class="cornrow"><span class="cn ${c ? '' : 'cn0'}">${i + 1}</span><span class="cc">${c ? `${fmtCoord(c.lat)}, ${fmtCoord(c.lon)}${c.acc ? ` <span class="muted small">±${Math.round(c.acc)}m</span>` : ''}` : '<span class="muted">Not recorded yet</span>'}</span>${c ? `<button type="button" data-re="${i}">Redo</button><button type="button" data-clr="${i}" aria-label="Clear corner ${i + 1}">✕</button>` : ''}</div>`; }).join('')}</div>
+      <div class="actions"><button type="button" class="small" id="mp-park">${pk ? 'Redo Parking / Gate Here' : 'Record Parking / Gate Here'}</button>${have.length || pk ? '<button type="button" class="small" id="mp-copy">Copy Coordinates</button><button type="button" class="small" id="mp-clear">Clear All</button>' : ''}<button type="button" class="small primary" id="mp-save">Done</button></div>
+      <div style="margin-top:6px">${[0, 1, 2, 3].map(i => { const c = cs[i]; return `<div class="cornrow"><span class="cn ${c ? '' : 'cn0'}">${i + 1}</span><span class="cc">${c ? `${fmtCoord(c.lat)}, ${fmtCoord(c.lon)}${c.acc ? ` <span class="muted small">±${Math.round(c.acc)}m</span>` : ''}` : '<span class="muted">Not recorded yet</span>'}</span>${c ? `<button type="button" data-re="${i}">Redo</button><button type="button" data-clr="${i}" aria-label="Clear corner ${i + 1}">✕</button>` : ''}</div>`; }).join('')}
+        ${pk ? `<div class="cornrow"><span class="cn" style="background:#e8590c">P</span><span class="cc">${fmtCoord(pk.lat)}, ${fmtCoord(pk.lon)} <span class="muted small">±${Math.round(pk.acc || 0)}m</span></span><button type="button" data-clr="P" aria-label="Clear the parking / gate point">✕</button></div>` : ''}</div>
       ${sideTxt}
-      <p class="small muted" style="margin:6px 0 0">Phone GPS (WGS84), not survey grade: the ± value is the GPS's own accuracy estimate. Each corner is the average of the readings taken while you stood still.</p>`;
+      ${have.length === 4 ? '<p class="small muted" style="margin:6px 0 0">Choose which corner is LL, UL, UR and LR on the trial page, under Trial Location.</p>' : ''}
+      <p class="small muted" style="margin:6px 0 0">Phone GPS (WGS84). The ± value is the GPS's accuracy. Each point is the average of the readings taken while you stood still.</p>`;
     showReady();
   }
   function setCorner(i) {
     if (!pos) { toast('Waiting for a GPS position…'); return; }
     const r = readiness();
-    if (r.s !== 'ready' && !confirm(`Not ready yet:\n${r.txt}\n\nRecord corner ${i + 1} anyway?`)) return;
+    const what = i === 'P' ? 'the parking / gate point' : `corner ${i + 1}`;
+    if (r.s !== 'ready' && !confirm(`Not ready yet:\n${r.txt}\n\nRecord ${what} anyway?`)) return;
     const pick = win.length ? win : [pos], wsum = pick.reduce((s, f) => s + 1 / Math.max(1, f.acc) ** 2, 0); // average of the readings since you stood still, the better ones counting more
     const lat = pick.reduce((s, f) => s + f.lat / Math.max(1, f.acc) ** 2, 0) / wsum, lon = pick.reduce((s, f) => s + f.lon / Math.max(1, f.acc) ** 2, 0) / wsum;
     t.geo = t.geo || { corners: [null, null, null, null] }; while (t.geo.corners.length < 4) t.geo.corners.push(null);
-    t.geo.corners[i] = { lat, lon, acc: Math.min(...pick.map(f => f.acc)), ts: Date.now(), n: pick.length };
+    const pt = { lat, lon, acc: Math.min(...pick.map(f => f.acc)), ts: Date.now(), n: pick.length };
+    if (i === 'P') t.geo.parking = pt; else t.geo.corners[i] = pt;
     t.geo.ts = Date.now(); t.updated = Date.now(); save();
-    toast(`Corner ${i + 1} recorded`);
+    toast(i === 'P' ? 'Parking / gate recorded' : `Corner ${i + 1} recorded`);
     if (!manual) view = null; panel(); draw();
   }
   function status() {
@@ -2803,8 +2901,9 @@ function openTrialMap(t, after) {
     const b = e.target.closest && e.target.closest('button'); if (!b) return;
     if (b.id === 'mp-mark') { const i = nextCorner(); if (i >= 0) setCorner(i); }
     else if (b.dataset.re !== undefined) setCorner(+b.dataset.re);
-    else if (b.dataset.clr !== undefined) { if (!confirm(`Clear corner ${+b.dataset.clr + 1}?`)) return; t.geo.corners[+b.dataset.clr] = null; if (!t.geo.corners.some(Boolean)) delete t.geo; t.updated = Date.now(); save(); if (!manual) view = null; panel(); draw(); }
-    else if (b.id === 'mp-clear') { if (!confirm('Clear all corner coordinates?')) return; delete t.geo; t.updated = Date.now(); save(); if (!manual) view = null; panel(); draw(); }
+    else if (b.id === 'mp-park') setCorner('P');
+    else if (b.dataset.clr !== undefined) { const P = b.dataset.clr === 'P'; if (!confirm(P ? 'Clear the parking / gate point?' : `Clear corner ${+b.dataset.clr + 1}?`)) return; if (P) delete t.geo.parking; else t.geo.corners[+b.dataset.clr] = null; if (!t.geo.corners.some(Boolean) && !t.geo.parking) delete t.geo; t.updated = Date.now(); save(); if (!manual) view = null; panel(); draw(); }
+    else if (b.id === 'mp-clear') { if (!confirm('Clear all corner coordinates and the parking / gate point?')) return; delete t.geo; t.updated = Date.now(); save(); if (!manual) view = null; panel(); draw(); }
     else if (b.id === 'mp-copy') { const txt = `${t.trialId}\n${geoCopyText(t)}\n\n${GEO_NOTE}`; (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(() => toast('Coordinates copied'), () => prompt('Copy the coordinates:', txt)); }
     else if (b.id === 'mp-save' || b.id === 'mp-close') close();
     else if (b.id === 'mp-style') { const k = Object.keys(STYLES); style = k[(k.indexOf(style) + 1) % k.length]; db.settings.mapStyle = style; persistQuiet(); b.textContent = STYLES[style]; draw(); }
@@ -2847,6 +2946,301 @@ function openTrialMap(t, after) {
     if (after) after();
   }
   panel(); status(); draw();
+}
+
+/* ---------- Trial Location & Directions sheet (one A4 page, PDF) ---------- */
+const LOGO_JPG = { w: 640, h: 138, b64: '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAQDAwMDAgQDAwMEBAQFBgoGBgUFBgwICQcKDgwPDg4MDQ0PERYTDxAVEQ0NExoTFRcYGRkZDxIbHRsYHRYYGRj/2wBDAQQEBAYFBgsGBgsYEA0QGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBj/wAARCACKAoADASIAAhEBAxEB/8QAHQABAAICAwEBAAAAAAAAAAAAAAgJAQcCBAYFA//EAF4QAAECBQEFAwUHDgoGCAcBAAECAwAEBQYRBwgSITFBE1FhCRQicYEVMlKRlaHRFhcYGThCVldidYKUs9MjN0NTcnaTsbTBJJKistLwMzZGVWV0hfEmJzREVGSD4f/EABsBAQACAwEBAAAAAAAAAAAAAAAFBgIEBwED/8QAOxEAAQQBAQYBCQYEBwAAAAAAAAECAwQFEQYSITFBUTITFiJSYXGRofAXcoHB0eEHQlOSFBUjJEOx8f/aAAwDAQACEQMRAD8An9CEIAQjGYb3hHmoMwjrTU9KSUo5Mzkw0wy2N5bjqglKR4k8o0VfW1FaNCcdkbZl3K9OIUU9qlRbl0nu3uavZG9Sx1m6/crsVy/L4mtYtxV270jtDfuR3iODj7LSd511CB3qUBEC7k2iNTrhWpCKymksKOA1T0bnD+kckn4o9FpBpdcuqdUTcN4VOpu2+0vJMxMLKpwj71OTkJ71D1CLFZ2RlpV/8RdlRiduaqRkWbbPJ5OFiqTTaeZfaS6w6hxCuIUhQUD7RHOOlIScrTKczJSjDbEu0kJbbbTupSB0AjXGsWsNK00ofZNFE1XJlBMtKBWd0fzi8ckj54q9atJalSGBuqqpLTTNhYr3rpobUhkd8V5SGt2qNOrD1RZu6dWt5wuOMukONZJzuhJHAeAxG37N2tHw6iWvihpUk4Bnad08VNk/3GLRd2JyVZm+1Ecns5kTBn60q6LwJXQjzlrXtbN40lNQt2qsTrR4KCFekg9yk8wfXHosiKk9jo3br00XsTTHtem81dUMwhCMTIQhCAEIQgBCEIAQgeAjGRw8YAzCMbwziGYAzCEIAQhCAEIRjIxmAMwjG9xxDeEAZhGAQeUZgBCEIAQjGeOIzmAEIQgBCEIAQhCAEIZhmAEIQgBCEIAQjGeMZgBCEMwAhCEAIQjGYAzCEYzAGYQhmAEIwDnlGYAQhmGYAQhGM+EAZhCEAIQzCAEIZ8IQAhCMZgDMIxmMwAhCMZgDB4CPGag6lW5p3bqqlWn955YIl5NsguPq7gO7vPSM6kah0nTmy363UlBx4+hKyoVhUw4eSR4d56CIB3hd1bva6n67XpovzDpO6jklpPRCR0Ai1bM7MPy0nlJOESc17kLlsqlNu63i5T0Oo2r12ajz6/dGZMrTEqPY02XUQ2kdCr4SvE/EI8DzGAOnLMYA48PozG6dENEJq/6k3Xq825L26yvIBGDOKB96n8nvV7PGOtzTUsFU3kRGtTonVe3tUpcbLGQnROar1GiGiM1ftRar9eadYtxlWcEFKpwj7xP5I6n4omvISUpTaexJSUs2xLsoCG2mxupQAOAAjMlISlMpzMlT5dEvLspDbbSBgISOQAjW2sGsNM00oXYtlubrsyg+aymcBI5do53IHz9I43kcjbz9xGtT7rU6J9dS81KsGMg48O69zOsGsNK03oHYs9nN1yZQfNpLPvR/OL7kj5+UQXrldqtx1+ZrVanFzk7Mr7R11fU9AB0SByEYrlcqlyV+ZrVanHJycmV77jjnzAdwHQR888skn1846vs5s7DiYt52iyrzX8kKfk8pJcf6PBvQe3J74R7uj6OalV6iM1al2rNPyj43mnCpKN8d4BOcePWO/wDWD1b/AAOmP7VH0xKOzlBjlR07dU9pppQsu4oxTxNAuOt2tWm6tQKk/IzjZ4ONKxkdyhyUPAiJhaP7QlPvQs0G6eyp1dPooc96zNf0fgq/J+IxHI6Bat/gdM/2qPpjm3oPq808lxu0ZpC0kKSoPoSQRyOc8PXFczkOEysa70zWv6OReP8A4StCS/UdruLuk/Ur3lCP1jVmjVR1G+pz3G1EoMxKzUqkBifWtKvOEdygDwWPnjaccbsReRkdHvIunVOReIZPKMR+mmohDrCPkfQQhCAEfmp1KEqUrgBxJPSMqXunlFcG2BtY1G4q7UNMNN6quVocqpUvU6nKr3VzyxwU0hQ4hoHIOPfYPQcQJF6ubbGlWms4/R6Ot27a2ySlcvTVjsGldy3uXsTmIq3N5Q7WKpzS/qco1t0KXJO4OwVNOgeKlqA/2YiHvE84Z48oAko1t3bRjb/aLuWlOpzns10pjd9XAA/PGxLO8o1fcnMttXvZlGq8tn03acpcq6B4BRUkn4ohPmMp9909sAXK6SbUGlGsIRJUCsKkK2U7yqPUgGnz37nHdcH9EmNzA5EUfaR6fXhqZqxS7YssONVFxwO+eoKkpkkJOVPqUnikJ+c4EXWWxSZmh2hTaPOVWaqsxKSyGXJ+bILswpKcFasdTAH1o4KXuniOHSMqVj/2ivvbF2saiKxPaU6aVMyzbBMvWKvLLwpxf30u0ocgM4UodcgQBILVzbF0l0rmnqSidcuWuNHdVT6SpKktK7nHT6KfVxPhETbp8opqrUZpYtW2bdobBOEl9C5t34yUp/2Yh0p1anCtRyonJPUnvjjnjAEkzt27Rvbb/wBU9LA+AKSxj/dz88ewtnyimrVOmUC5retytsA+l2TS5Rwj+kFKGf0Yh70jjk5gC3DSXbQ0l1NnZejzsy7a1ceISiTqqkht1R6NvD0T4A4MSMbWHE7w5RQKlZB4D2RODY/2tqlR67IaXalVNU1R5lSZel1SZXvOSaycJaWonJbPIE+9JHSALHIRxQreTnIPiI5QBF/aU2tJzQHUemWuxZLFdTPU8TxfXPFgoy4pG7gIV8DOfGNLfbK6l+KWU+V1fuo8r5R77oW2f6vp/wAQ7ENSeMAT0+2V1H8Ukp8rq/dRyb8pXO9oO10mltzPHdqxz+yiBEZyYAsttnyjOnVQmWmbosyvUYKPpPyy0TaE+OBuq+IRKCwdUbF1Ot8Vmx7ik6tLADtEtKw4ye5xB9JJ9YijLJHKPW6dak3bpffcnddoVJcpPSygVJyS2+jq24n75JHDHxYgC88KyeUZjxOk2o1J1X0jo190cdmzUGcuy5OVMOpO6ts+KVAj1Yj2pgCMG0rtZzegGoVKtqXspiupnqf56X3J0sFB7RSN3AQrPvcxpX7ZXU/xSynysr91HmPKPH/5/Wx+YR+3ciGXWAJ6fbK6n+KWT+VlfuofbK6n+KWT+VlfuogXCAJ6fbK6n+KWT+VlfuofbKqmeH1pZP5WV+6iBcIAuW2bNdJjXzTioXTMW61Q1SlQVIiXbmS+FAISveyUpx77GMdI3REOfJzfc6XB+fl/sG4mNAGjdpjX6Y2frOoteYtlqumpTqpQtOTJY7PDZXvAhKs8sYiNH2yupddJZT5XV+6j2PlJeGjlmfnpz9gqK2iYAnp9srqP4pJT5XV+6h9srqP4pJT5XV+6iBY5c4HnAE9PtldR/FJKfK6v3Ub12Ztqab2grmrtKmLOYoQpUs3MBbc6X+031lOMFCcYx4xUrE4/Js/xj30M8Pc2W/amALGj70/5RGbaU2o67s/XfSKeLAl63TapKqeZnVTymMOJVhbeAhQ4ApOc/fRJk8uMRj259O/q02Xpqty0v2lQtp9NSbKRx7E+g8B+iQr9EQBpP7ZXUfxSSnyur91D7ZXUuY0lk/ldX7qIFqAB4GCecAXqab3pKaiaUUC9pJsNM1aTRNdkFb3ZqI9JGeuFAjPhHqTwiJXk/byNe2bZm2X3VKmKBUVspBOSGXR2iMeGd4RLPJ8IAjDtJbXSdBtQqbasjaTNfmJmS88fLk6WOwBUUpGAlWc7pPTlGlvtldSx/FLKfK6v3URz2rrzF7bXF41FtztJaUm/c1g54BDA7M49ags+2NLZMAT2HlKqmVY+tLKeyrKz+yic9jVuq3JpxRLgrVJRSZ+oSbc09IocLgYK0727vEDPAjoIp22eNPVanbSFr2qtpS5RU0mZnSBwSw0N9efA4x7YunbbQ00lttAQhIASkDAAHIQBzj8pmYZlZRyamHA200kuLWo4CUgZJPsEfqeUR42ztTfrd7L9VlpSYLVVr59yZXdOFALBLqh6kAj9IQBouteUhXJXFPylL0xlp2SZmHG5eaVVCgvNpUQlZT2ZxkYOM9Y6P2yuo/iklPldX7qIGKJwP8o4wBZHpht/t31q3Q7RrVhS1DlKpMplfdAVEu9ktXBOUlscCrA59Ym0M7vHnFBMpMvyc6zNyzqmn2VhxtxPAoUDkEeogGLs9D9Q2dUNAravNtSS/NSiUTaRx3JhHoOg/pAn2wB9u/6zd1Bst+pWTbUrcNUaWk+YzU6JNCm/v1doQeIHHGOMaPtraVvusbOdy6x1XTKnU+i02TW9IBusdsqbdQ6WltrSGwWwCPfYOe6JHzjBmZGYYSoJLjSkAnoSCP8AONEUvQCtU/Yiqmh5r8gupTjcyhNRDa+xSXZgujKffcAcQB5C4ttCVo2zhb2okrZ3nVZqc69JTFCVNFPmhY/6ZSl7hOE5RzSM78Sio1QNVtyQqha7IzUs2+UZzu76ArGfDMRXr2xy7U56+JuSuSUZVXqOzIyDDray1JTJ7Hzl/d7nOwGMcePGJT0SQXSrZp1MccS4qVlmmCtPAKKEBOR8UAd88o6s5NsyUi9NTDqW2mkFa1q5JAGSY7R5RoHajvhVA05ZtqSe3JysLKHMHBSwnBWfaSkfHG5j6L71mOuzm5TXtzpXidKvQjhrBqPNaj6gv1FLqhS5YlmRYzwDecFZHwlcD6uEa+xGeI4RujRHRCcv2fRX6+0ti3GVcAcpVOKH3qT0T3q9gjvMs9XBUk3uDWppp3/c5yyObIWNU4qvP2DRDRCbv6fbr1wMrl7cZc5cQqcUOO6n8nvPxRNiTkZWnU9mSkZdpiXYSG2m2wEpQkdAIzJSMpTac1JyMs3Ly7KA2202nCUgcgBGtNYNYKVppb5Zb3JuvTCD5rJb2d38tfckfPHG8jkbefuI1E115InT66l5rVYcZBqq+9e5y1h1hpmmlALbJbm67MJIlZTPBP5a+5I+eIL1yuVW46/M1mtTi5udmVlbjqzz8AOiRyAhXK5Vbir8zWazOLm56YXvuOrPHPcB0SOQEfOjrGzezcWJiRXJrKvFV7exCnZXKPuP0/lToO//AJ9sSF0I0HduJ+XvG75RSKSkhcrJrSQZojiFKHMI/vxEfELU24lxBwpKgocM8o9w3rJqey0hlm9Ko22gBKUJWlIAHQDEbeerX7UHkKTkaq81Xn+B8MdLXhfvzpr2LDWmm2WENNtpQhA3UoSMADoBH6DGOUV4fXp1Ux/14q/scH0Q+vTqp+HFX/tB9Ec4+zzIdXt+f6Fo85aycmqWIcO6OJ3eo+aK8fr06qfhxV/7QfRD69Oqh/7cVf8AtB9Ee/Z5f9dvz/Q985q/ZSw4JTwI+OOYPHGYruOtOqmD/wDHFW/tB9EbE0V1tu1WrklS7suOaqNOqOZYCZUCGXDxQoe3h7Y1bmw16rC6ZzkXRNdE114fgfWDaCvK9GIi8SZoOYzHFBzmOUUpCfEIQj0Ggtr/AFTf0t2aKrNUyZ7Gs1hYpUitJwpsuA77g8UoCvaRFQKnHCslSiSTxJ4xPDyk9cfNfsS3Ao9iiXmZ0pzwKlKSgH4kn44gaffGAMDicRsTSjRS/tZ7iXSbIpPbpZAVMzswvspeWB5b6+89EjJMa7i6XZy03pmmmznbFElZZtM4/Jtz0+8kYL0w6kLUSeuN7dHgkQBDgeTavT3KDqtSaEJzd4sCSeLe93b+c+3djQV+7M2rmnl+0y1apbi55+qviXp01TSX2JtZ+9SrA3T1IUAQATyEXO4Efk5LS7zja3WG1qbVvoUpIJSrGMjuOCeMAaV2atn+kaF6apk1BqauWfSlyrT4Gd5XMNIPwE54d54xu4AAYEAABgDEZgDUG01qcvSfZvr9zSbobqjrYkKeT0fdyEq/RG8r9GKZXn3nplx551brjiipa1nJUSckn1xYp5SSrOs6f2VREOKDczUH5lxIPA7jaUp/3jFc5OSTAGCcnJjZGkuiN+603Ouj2XS0rQxgzdQmVdnLSqTyK18eJ6JAJMa3i5TZZ0/p+n+y5acnLS7aJyoSaKnOugYU468kL4nrgKCR6oAiw35NeumjBbuqdOE+Rns00xZaz3b2+Djxx7IjBrDoPf8AolX25C8Kc2ZWYJ80qUoouS0yB0SrAIV+SoA+EXXkAjBEas2iNPqdqRs4XTQZuXQt9uScnJNxQBLMw0krQoHp73B8CYApVjkhSkqCkkgjiCOYgsAAYjiIAuI2R9UXtUdmikz9Sme3rFLJpc+snKlrbA3Fn+kgpPrzG9gYr+8mvWXSq/LfKj2I81nEpzyUd9BPxYiwAZxxgCs3yj33Qts/1fT/AIh2IaHnEy/KPfdC2z/V9P8AiHYhoecAbX2c9NaHq3tDUWxbhmJyWp863MLcdlFhLg7NlSxgqBH3o6RM+5/J0adu27NG1bwuCUqiW1KYM8WnmVKA4BYCQoAnqD7IhJoRqhLaO650m/5qkPVZuRQ8gyrTwaUvtG1I4KII4b2eUSjvPyjdRqNsTNPszT0UqeebU2men53twzkEbyUJQnKhzGTiAIN1CSeptTmZCZQEvy7qmXEg5wpKik+zIMdYEg8OcftMvuzMy7MzDilvOrK1qVxJUTkk+s5j8RAFmHk5axMzehVy0h1RLMlWt5odB2jQJA9qfniZpiL2whYU7Z2y+3VanLLl5q4J1dRShYwQyEhDZI8QlR9REShgCLe01smVLX7UWlXLJXrKUNEjTxJFh6SU+VntFL3shacD0sYx0jSP2tSv4z9dimfJLn72LEsCOKgMQBRfqZZDum+rlfsV+fRUHaPNqlVTTbZbS6QB6QSScc+WTHk+uI29tRfdiah/nhz+4RqGANv7PuhE3r3f0/bEncTFDXKSRnS+9Ll8LAWE7uApOOcSO+1pV8c9WaZ8kr/ex5ryc/HaGuD8xq/bIizaANKbNGhc7oHptUbWnbjYri5uoKnQ+zLFgIBbSjdwVKz73OcxuuMAAchGYAhP5SX+JyzPz05+wVFbJiybykv8Tlmfnpz9gqK2TAHptPrUN86o29Zwm/MzWJ9mR843N/si4sJ3t3IzjPLMTW+1puHj9dpPyOf3sQOp1RnqTVJepUybelJyWcDrL7KilbawchSSORHfHuPr6ayfjPuv5Sc+mAJc/a03Pxtp+Rz+9jeOzXstK2fblrtVVeYrvupLNy/Z+YmX7PcXvZzvqznlFav19dZPxn3X8pOfTFh+wZddy3hoLWajdVeqFZm260tpD88+p1aUBps7oJ6ZzAErI6FapUnW7cnqNUGw5KTrC5Z5B5FC0lJ+Yx34wfewBRVqLaM3YWqlwWbPIUl6lT7srk/fJSr0Fe1OD7Y8wImZ5Q/Ts0TWCi6gybGJWvSvm8woDh5wzwyfFSCn/VMQy9UATC8nneYo20DVbSfd3Wa7TVFtJVjLzJ3xjxKCv4osYv65WLP0tuG631hKKXTn5vicZUhBUke04HtimDRi712Hr9aN2Bzcbkamyp45x/BKVuOf7KlRZFt23oi3tkuapktMAP3DNsyKN0++bB7VZ9WEJ+OAKqp6beqFTmZ+ZWXHph1TzijzKlHJPxmOvGVY3zjlH6y0u9NTTUtLtKcedUG20JGStROAB6zwgCwLyc2nPZUq5tUZ6X3VPrTSZBah96nC3lJ9u4n2Kie0a80QsBnTLQK2LMQkB6TkkqmiBjefX6bh/wBZRHsjYcAYUcJJirLb21MVd20Kmz5GZ36dbDPmygk5CplYCnT6wN1PsMWSak3nIaeaT3BelSWlLNLknJgJJ9+sD0EDxKike2KPK9V56v3LP1ypvF6dnplyZfWeZWtRUr5zAHQByeP/ALQKcDiIwk8/VEp9W9AjaGwnptfiZLcqinFu1ZW7ghE36bO9/R3Uj9IwBFjjjBET38nTqaUTlx6V1CY4Op91qeFHqMJeSPZuKx4KiBBGO+Pd6N37NaY6323e0stQTITiTMJB9+wr0XEn9EmALwcAgQ3RH4SE5LVClS0/JOh2WmGkvNOA5CkKAKT8REdiAOO4nu9kcoQgAeUQK2i7kXcGu9RYQsrYpqUyLQ6ZAyr/AGlH4onk8sNy63FHASkkk+AiGGmekM9qlf8AUbyuNt1m33J117qlU4orJCUn4Per4ot+yFmvRmkvWF4MTh717EHm4pJ2Mgj6qfL0R0Rm79nkXDXmnJe3GF8ByVOEHilP5OeZ9gibMlJSdNpzMjJMNS0sykIbaaThKAOQAjMhJSlOpzElJy7UuwygNtstpCUpAHAAdOEa11i1gpOmdBLTBam67MpPm0lngn8tzuSPnjQyORuZ+4jUTXoidvrubFarBjINV/FRrDrBS9M6D2LJRN16ZR/okoDndH84vuSPn5RBiuVyqXHcEzWqzOOTc9MK3nHXDnPgO4DkBCuVup3HcEzWaxOuzk7MrK3HnDkk+HcByAEfOzhO90HHPdHWtm9m4sTFq5NZFTVV7exCm5TKPuP0avopyEI9bNaa3hJ6ctXu/RnkUhxRT2mPTCei1J6JPwo8keZ8OZxiJ6vbhnRViejtF0XqRksD4tN9NBmG8ByV88dqmzq6dVZeeQww+WlhfZPo321+Ch1ETM0qGj2plrpmWLLoTFUYATOSJl07zRPUd6T3xD53OvxLEkWJXsXmqdDex1BtxVajtFIU7w+F88N4d8WM/Wp02/Ami8f/ANYRkaUab442TRf1YRVk/iNAv/AvxQmfNiT10+BXLvDv+eMbw7x8cWN/Wo02/Ami/qwh9ajTb8CaL+rCPftFg/oL8UPPNiT1kK5MjvEfrLTLspNtTUuvddZUlxBB5KSQR8+IsW+tRpv+BNF/VhGPrU6bjj9RNF/VhGL/AOIcDmq1YV4+1D1uzMjXI5Hpqh9ayq63c1gUivNKBTOSjbxx8IjiPjzH346NKplPo9NaptKk2ZSUZGG2GU7qEDnwEd6OWSK1z1VqaJqW+NFa1EUQhCMDMro8pNT3039Y1VxhlyQmJYK/KS6FH5lCIMdYtd269Npi+NmtyuU2XU9ULZf90QlIyoy5TuvAeobqv0TFUZByTgwAHA8Iu/0Vu+nX1oBaNzUx1K2pmmMpWkHJQ4hIQ4g+KVJUPZFH45xvrZ72obt0Imnqe3LJrdtzTnav0t90oKF9XGV8d1R68MHEAXCRx3hnEQ4T5RTSU0YzC7XuoTu7nzXs2SM92/vYx44iOOpO3DqZd+otJrVqqFs0ikzQmJemocLnnJGR/pKuAWCCRujhxzzAgC1eEaz0Q1ktvWrS+UumhuJamQA1PyBXlco+BxQeuDxKT1HtjZkAQU8pPTnFWdYlXSkltqcmZdZ7iptKk/7piu0++OIuH2utNn9S9l2uSFPZU9U6YU1WTbSMqWpoHeSPWgr9uIp4PFXIwBkRdNs4XdI3nsu2VV5N9C1opjUm+kHih5kBtaT7U/PFK8b62dtp25tBqw/KIlRWbZnXA5NUta9woWOHaMq+9VjgRjB6wBcIeUa/1tu+n2Ns+XfclQcQluXpjyEJUcdo4tJQhA8SpQHtjQyPKF6KKoomXKbdKJzdz5oJNBOe7f38e3EQ92jNqa5ddn2qQzI+4lrSrvasU5Lu+48vkHHlDgogcAkcBAEf18h8UcRDmYyj32TnEAT08mvS3vdW/q0U/wACGpSVB/KKlr/uEWDp5RHHYn01f0/2YpGcqMv2NTuB41V5BGFIbUAllJ/QGf0okeOEAVmeUe+6Ftn+r6f8Q7ENDziZflHvuhbZ/q+n/EOxDQ84AzjMYye8xuHZjtGiX7tK0Oz7hlkTFOqbE3LuoUM7pMs5urHcpKsKB7xHi9SLEq+mmqNasittqRNU2YU1v4wHUc0ODwUkg+2APKI4uAHl4xMTZY2Pl6jMU3Ue+p2VFqKV2kvTpZwOOzpSr3rmODacjiPfHuEQ6HBUTC2F9ePqI1COmVxToTQq+6PM3HVejKznIc+SXOAPiEwBZpKS0tJybUpKMtssNNpbbabTupQkDASB0AAwBH7xxT772RygBGFcozGFcoApg2o/uw9Q/wA8Of3CNQxt7aj+7D1D/PDn9wjUMATI8nP90LcH5jV+2RFm0Vk+Tn+6FuD8xq/bIizaAEIQgCE/lJf4nLM/PTn7BUVsmLJvKS/xOWZ+enP2CorZMAZAJOEgk9wjn2L3805/qmPW6VV+k2rrbady10q9zKbVZebmghHaHs0OAqwnqcDlFjw24tmZIxu1L5EH0wBVp2L3805/qmLN/J1BSdnOuhSSD7vL5jH8i3H1Ps49mb4NT+RP/wDY9pphtU6MalX/ACtk2S7Uk1KaSt1ttynFhs7id5RJzjkIA33A+MYByAYzAGg9sPTr64eypXmpaX7SpUYCryZAyctZKwPW2Vj4op/UBnhyi/abYZmpJ2WmEBxl1JbWg8lJIwR8RMUj62WC9pnr1c9mLbUlmSnVmWJGN5hfptEfoqHxQB4FJIziJG7SWso1L0s0lpKJsPOyFC7aogKyRMlXYne8d1re/SiOOIxAA8Dgxv3Y807Ooe1PQ2pmX7Wm0fNWm8pynDR9BJ9aymNCDlFmHk89OfcLRiq6gzrG7N3BNdjLqUniJZnIGPBThUf0RAEywMCB96YzHB11tphbri0oQlJUpSjwAHMwBB3yiepYp1kULS6nzOH6o57oz6Enj2DZw2k+Cl5P6AiucxtTaL1HXqntF3HdSHiuR8480kBngmXa9FGPXgq9saqgD0FjSVDqOpNDkrmqbNMozs80J6ceBKWmN4FZIAJPogjgOZiy7WHXPZq1B2ebisGW1Mo6TMU5TUigS72G3WxlnGW+GFJSPUYqxhAHJfvueT1gkkEGOODCALadiLUs37swyNKnJjtKnbbhpj+8TvFoDeZV/qnd/RiSsVSbCWpX1E7SjVuTsz2dNuhnzBQUeAmE+kyfXneT+nFrQIxzgDMIQgDg62h1hbS0hSVpKSDyIIjrSkpKU6Tak5NhthhpIQ202ndSkdBHcPIxqnWPWKl6a0MsMdnN12YSTLSm9wA5b6+5I+eNirVltypBCmqqfKaZkLFe9eA1h1gpWmtB7GXLc3XJlB82lAc7o+G53J/viDFbrlUuOvTNarE45NTsyvfcdcPHPTHgO6FcrdVuKvzVarU25NT8yvfdcX17gO5I6AcI+d8ZjuOzezsWJi3lXWR3Ne3sOfZTJvtv0Tg1OQ5ju9mY3Rs8afW1e16vTVwTzKhIAOt0wnCnzz3j3pB6eEaYx38I7tGrFSoFclqvSJxyUnZdYW28g8Qf8x4HnErl6s1uo+Gu/dcvU06UzIZmvlbqiFmL0hJTFMVTnJZpcqpHZlgoG5u8t3HdEMdctDJiyJ125LcZcft5xW842MlUmSeX9DuPTlEg9G9ZaZqRQhLTam5Svy6R5zLZ4OdO0R3g8MjpmNoTUtLz8o5KzLDbzLiShxpxOQoEYII6xxKhkLuz9xdeC68U6L9dy+WasGShRyfgpV2cDJz7Y+zbFz1mz7mlq7QptUtNsKzkclp6pUOqT3RtnXHQyZsicduW22VvW84rLjSRvKkyTyJ+Bx4HpyMaOIwcE8fnjtdK7VzFXej4scnFPyUok8M1Kb0uCkr5Pa+pKJFpM3Zs+XwkdoWphATvdcZ44j9vswKF+BtU/WW4iVkjhmGVd8Qi7DYlV8C/FSQTP2fW+RLX7MChfgbVP1luH2YFC/A2qfrLcRKye/1+EY3j3x55iYpObF/uU984LPrJ8CW32YFC/A2qfrLcDtf0IjH1GVP9ZbiJO8e+GfmjxdhcUvJi/wBynnnBa4aOT4FielepMpqfa0zXJOlzFPQzMqly2+tKycAHOR6493Gj9lWRVK6EecLGPOp950HvAwnPzGN4RyDKwRQXJYofC1VRC70pHSwNe/mqCEIRHm0dealWZyVdlZpht+XeQW3GnBvJWkjBBHUdIqa2qdm2qaMX09W6LKvTFl1J0qk5hKSfM1E5LDh6YzhJPMY6iLbY+ZW6DSbjoc3Ra7TZWo06bbLT8rMoC0OJPQg/8iAKFcHOMQwe6LBtX/J5tTM4/WNH623LJWSv3EqqyUA9zT3MDwXn1xFS59mTXa0phxFU01rjqEHHbyLPnTavEFvMAajwY5J4KzHr29KdTnn+xb07ulTmcbvuU/8A8MbHs7ZA19u+cbQ3YszSJZXObrCkyyEjvwfSPsEAeb0J1quLRHVCXuSlb0zTncM1OnFWEzTOeI8FjGUq6HwMXKWxXpK6LPptxU1L6ZSoSyJplL7RacCVjICkniD3xF/Q/YYsjT2oSty31NNXbXmSHGmFN7slLrHEKCFcXCDyKuHhEtG0BtO6OQ5DugDC0hYKVJBBGCCMiKutsPZln9N7unNQbRkHHbQqTxdebZTn3NeUcqSoDk2TkpPIZxFpEdSoU+Uqcg/IT8qzNSkwgtvMPICkOJIwQQekAUHKSoKIUMGOMWQax+T7oNbnX67pLVmaDMOKK10adClSpPc2sZU36jkeqIkXXso692jMOJn9OqnOtJ/+4pYE22r2oJPzQBpfMYxHrzpVqaJjsVaeXSHPg+5b+f8Adj2trbLGvV2TDaadpxVpZtZ/+oqKRKNp8SVkH5oA06kccYzmJO7JWzRUtXL3lrruSRdasmmvBby3BgVBxPEMo70598e7hzMb10f8nvSqbOy9b1crLdWWghYotOKkME9zrvvlDwTgHvibtKpUhRKUxS6VJS8lIyzYaYl5dsIQ2kckpSOAEAdllpthlLLTaW20AJShIwEgcAAOgj9IQgCszyj33Q1s/wBX0/4h2IannFke2Ts46qayaw0avWLSZKbkZSkJlHVvzqGT2gdcXjdV0wocYjidhLaKz/1cpXyo19MAfH2LeG2xZ3rmf8O5EnvKA6Me7NmSer1DlAZ2kgSlV3BxXLE+g4e/cUcE9yh3R5HZr2TNaNNdpm3LzuqiU+XpMkXi+41PtuqTvMrQMJHE8VCJ/wBaotPuG256g1eWRMyE8wuWmGVjIW2tJSoH44AoTIIJBGMR+jDrrEwh5ham3UEKQtBwUkHgQehiU9z7Bmt0reFTlrZplOn6M3MrTJTLtQbbW4zn0CpJ4g4xnxEfJ+wT2ivwdpXyq19MATn2StdEay6LNJq0yhVz0UJlKmnPF7h6D+O5YHH8oHviQAIPIxXRoFs5bTmi2tFOu2VtynOU9REtU5RNWa/h5ZRG8Ofvk++HiPGLFW87uTnjxweYgDnGFcozGFcoApg2o/uxNQ/zw5/cI1DE1tctj7XG+tou8Lut6hU56l1OormJZxyottqUggYJSTkco199gntFfg5SvlVr6YA9n5Of7oW4PzGr9siLNohHsc7N+qejur9Xr980mSlZGZphlW1sTiHiXC4lWMJ5DAPGJuQAhCEAQn8pL/E7Zg/8Zc/YKitqLY9tDRu+9ZtOrao9hyMtNzUjUlzL6X5lLASgtFIIKufE8ohidhLaKBx9TtKP/qjX0wBGmMjlElPsE9or8HKV8qNfTD7BPaK/BylfKjX0wBGyJHbDP3Z9v/8AlZr9iY/X7BPaK/BylfKjX0xuXZd2VdY9LtpOkXhd1FkJalSzD6HHGp9t1QK2ykeiOJ4wBYIOQhAcoQBg8ory8ozp0Ja4ba1Ok2AlE22aVOrSn+UR6bSifFJUP0YsOjVe0Vpg7q7s716zJJtpVTcQmZpxcVuhMw2oKRk9ARvJz03oApWUCMeIzGIkt9gntFYB+pulD/1Rr6Yx9gntFfg5SvlRr6YAj7b1FnriuinUGmNFycn5luVYSBnK1qCR/fF49h2lI2JpjQrNprYTK0qSalU7v3xSkBSvWVZJ9cQd2Y9jzUmxtoWl3jqPSZGWptKQ5MS4ZnEPFcxjdRkJ6DJPrAiwYcoAdI0Pte6l/W02Xa3Mykx2NVq49yZIpVhQU6DvrH9FAV7cRviIX7Y+iet2tl9USTs2jSb1uUiVJQt6fbaU5MOH01FKuPABIHt74ArTPPn4xhPPMSU+wS2ivwdpXyo19Md+h7B+uztzU5qt0WmS9NXMtpmnk1FpZba3hvkAHJO7nhAHRtDYg1lvew6TdlMct6Xk6nLJmmG5ybUh0IV73eSEHGRg+2Pt/a99c/8A8y0/19f7uLQqZT5alUiVpkk0lqVlWksMtp5JQkBKR7ABHbgCmrWLZj1I0QtqQrl3+5b0nOzBlUOU98u7i93eAXlIxnBx6o0ur3xxyi6jaK0wc1c2ea9Z0k02uqOITMU8rVugTDat5GSeQPEE+MV2HYT2iic/U3Shnjj3Ua+mAI7UmpTdGrknVqc8WZyUeRMMupOClaFBSSPaIu/0uveT1H0et+9pMjcqcmh5aR945jC0+xQUIrI+wS2ivwdpXyo19MTW2PNO9V9KdNarZOo9LlpaTbm/Oqa4xNofwFj+EQQnkN4bw/pGAJJwhCAB5GK9tc6dP0zX24Wp5954uvh5lbx3strAKU+ocR7IsJPKIsbWtnKW3S74lWchH+hTakjiBneQo+Hvh7Yt+xN1lbJNSTk5NPcpCZ+B0tVVb0IsYwOXD+71xIbQfQZdxusXfeMqU0lJCpWRdGDNH4Sh8DuHWI9oWpp1K0nCkkEHuI4xNjQrWuRveks25WyzJ1+XbCUpACETSB1QOh70/FF/20tXoKf+010XxKnNPruVnAxQST6TLx6Iaw140FVQXX7xsuVK6ar05yRaTky/5aR8Dw6RHTqPYYtHU226yULQlSVDBBGQfDHdERNedBl0NyZvGzJRS6YSXZyRaGTLE8SpA+AeeOkQGyW1vhpXF9zv1JHNYbRFng/FDQVGrNSt+uy1Yo845KTssoLadbOCD/mPCJy6Oay03UiiJlZvs5Wvy6cTEsDgOY/lEeHeOkQL+P8A5/yjv0as1O361L1ejzbkpOy6wtt5s8Un/Md46xatodnYcvFvN0SROSkRi8m+k/Tm3qhZpMysvPyLsrNsIeYdSULacGUrB5giIX65aFzFjzrty20yt23nVkuNAZMkT0P5GeR6cu6JA6Oay0zUihCVm+zla/LIzMy2cBwfziO8d46ZjZ81LS0/KOys0wh5h1JQ424N5K0nmCI5NQv3Nn7atcn3m9F+uilys14MlAiouuvJSrzH3ueI58YCN5a5aGTFkTjtx20y5MW86r+FaSN5Uko9D+RnkenI98aN5kePf1juGMycGSrpNA7gvTqi9lKBbqPqyeTkTibg0y0Tpup1EXM0++GJWeYOJiRdlCpbXcQd/wBJJ74999h9O/hyz+on/iiPNsXTWrQuWWrtBnFS02woHPRxPVKh1B7onfpVqrR9S7ZTMy6kytTYAE5IqPpNK+EnvQeYPxxRNqJ8xi3rPBKqxL7E4ewsWJjo2m+Te30kNLfYeTp/7cM/qJ/4ofYeTo4/Vwz+on/jiVqSTjoY5+uKf535b+t8kJz/ACWp6p5fT20G7F08plrtTImBJtlKngkp31FRUTjJxxJj1EIRXZJHSOV711VSUYxGNRreSCEIRgZCEI4lYBwfXAHKOJT3HHq4QCwTw4+MZ3hADd8T8cY3fH2xknAjj2g6EZ9cAcgCDGY4heekCvB5QByjiVgKIPDxjG+PZ3xGja/uDXqhWxbzui8vUy25Mr90nqXLh99JAHZpIwSEE5yQIAkzkYjBTkcDj1R5XTeZu2b0jtyZvuXTL3I7INKqTSQBuvlI3sgcAe8DkY9UV7vT2ZgBu8PfH44FGeYB48MxkKz0gTgQAAIgTgRjfSDgxgneSCk8IAzvpzjMZBzEPdUrm2ppLbco1JsqnVBdkKelg2lmXCpR5kkdup5f3qh6fM9BgcYmCngMdBAGSkHmM+uG6MRgrAhvg8oAyEgd0ZPKOO/4Q3xnpj1wA3ePSM7ojAWkngRGSYAxu93COQjiVgHB4d0AoHliAOUIZjBUAeMAMCG6IwFg8o5QBjEZhCAEIQgDBGYbojMIAxuiG6IzCAMbohugd0ZhACEIQAjBGeHSMwgDG73w3RGYQBx3ePeO6OXSEIARjdjMIAxuiG76ozCAEIQgDBGYxu9/GOUIAxuiMAERyhACEIQAjz94W1IXdZlRt6pJ3pecZLaj1SeYUPEHBj0Ecd3nGTHujcj2rxQxexHtVq8lKy7ptup2lds9b1VaUialHSgnHBac8FDwMfOkp2ap0+zPSL65eZZWFtOtndUg94MTW2gdH/q7oBr1CZT7vyKCAnl503zKPWOnxRCV1lxh9bLzam3EK3FoUMKQe4jv8I7xs9m4cvURr/GniQ51k6MlKbVvhXkpNrQ/W+UvyQRb9fdRLXEyjAB9FM2kffJ/K7x8UbqcQ240ppaQpKgQpKhkEdRiKv5OcmqbPsz0hMOS8wwoLbdaVhSSDkEHwMTW0P1xlL8pyLfr7zUtcLCB4Jm0j75Hj3j2xQdq9lHUXLaqprGvNO37Fiw2ZSdqQzeLp+5q7XrQZdCVMXlZsopVMJLk5ItpJMsTxK0DqjvHSI544Zx/z/nmLR1todaLbiApCsgpIyCDzBERE150GVQnJi87OkyqlqJXOSLYyZbJ4rQBzR4dIktktreVK6vD+V35KamawqcZ4E96GgaPWanQK7LVikTjkpOy6wtp5s4KT9B5EROXRzWWm6kUMSkyW5Wvy6B5xKBWO0HD+EbB5jvHT2xAzHEH/n2eEd6jVip0CuS9YpE25KzsuoLadQcEH6D1HWLXtFs9Dl4d5vCRE4KRGMyb6T9F8K8yzWak5efk3JWcabeZdQUONuJ3kqB6EHmIhdrnoZMWROO3LbTC3redVl1tOVKklE8j3oJ5HpyMSC0b1lpupNEEpMqala9LIzMSvLtBy7RHeO8dD4RtCZlGJ2RdlZtht5l1JQ424MpWkjBBEcnoX7mz9xWuReHiReS/XRS5Wa8GSg4L7l7FXfHqOPLHjH2LXuitWhc0tXKFOKlpthXAj3qk9UqHUHrG2tc9DJiyJp25ral3HbedVlxpPEySjyB/I8enWNG+sfFyjtVK/VzFXfZo5ruafkpRLEE1GXTTRULB9KNVqPqXbaZiXKZaqMAJm5EnJbV1Ke9J742MDkxDXZl05rtSvFq+VvP0+lSailCm1bpm1/A8UDqesTJHOOH7Q0a9K6+Gs7eany9h0DGTyT12vlTRTlCEIhCQEIQgD5tdrlOtu3J6vViZRLU+RYXMzD6+SEJGSYr7qu0rtKa/agTtG0BpMxS6NLKO6uXaR2m4ThK333BuoJ5hIx3cYkvtouVFvYsvD3OKwV+bIeKOfZGYb3vm4Hwjy+wRL0FrZLlpimBnz56pTBqCk43+0CgEhX6G7j1wBpKq67bXWglHmpPV6kLnpOflnWZCsLQ06ZaZIO4oOt5SrBxlC+Y5RvjYt1bvvWDS+4KzflVbqE5J1QS7K0MIZCUFpKsYSADxJj2+1JLUF/ZHvkXAloyyKcpxsuAcHwR2RT+VvYA6840h5N8Z0PuzP/fac/2CYA+xtP7WNZ0+vFnSzSumt1K73txMw+psvCVUvG42hse/dIIPHgARwJPDWUrMeUMt+RF5zKJmoy6R2zlJmPNXllPMp83Sd4cOgOe6Pj6LeaHyst1fVgWzUBP1PzPzjq/k7m7nruZ3fZiLGxu7uRyxwwIAr+0y2vdUdSdsS1ra7ZukW9UX0y83RlS6FFtaWj2gDhG+BvpJGeOOcb82x9Ubz0k0Kp9x2NU0SFReqzUqt1bKXgW1NuKIwoEc0j4oi437gDyx0sLb7HzT3c/hOwI3O383Pa4xw9/nPjmN5+UQJGy7ST/4+x+xdgDUFA2mdpzVpdv0nTiiT7zEilhFcqknT0uKmHCsFxRURutpxySnB5xvXbW1hv3R6wrWqdhVVunTM/PvMTCly6Ht5Aa3gMKBxxj3OyXRqdSdjuxxISyGDMyPnb5SMFx1a1FS1d54AeoRovykwxpZZAH/AHq/+xgCT1v3yqR2ZKVqLc7pfU3brVWnltoCS4rzcOL3QOAJOeHLjEIaHq5th7Rlbq1c0pnGaPRae8EJl5dxmXQgqyUtlbnFxeMZ6eqJpWBQafdOyRa9tVZCnJGpWtKyj4B4lC5ZKTg9/Hh6oh43s87UmztcVQqOiFdar1DeWVLlWVN77qRnHayzvBShnGUEkwBufZg1V18uK76xY2sVmTuaVlCq+ZYMJQ6P5JzGEuFQ4pUjPjH39qLadldCqDKUiiyLFUu6poK5aWdz2Uu3nHauAcSM5AT1I7o8fs6bWtbv7U1Wk+p9tN0S6wHEtOsIU2l1xtO8ttbSuKFYBPDgcRpjV9EjOeVyocveQR7kpnKclsPn+D7PsgW+fDd7Q8fHMAfpLVnyhFy0xN7SDdYYk3E9u3JoalmCpGMjdllemQRy4cY3hsp7TV16r1qpWHqFbr0tclLbLi59iWU205undUh5OMNOgnl148BiJUDATunAA4d0dGnydIlpmdcpsvJNPPPdpNrl0pSpbmBxdKeasY99xxiAIjaua8am2t5QW2NL6PWmWbZn3qciYlFSraysPLwv0yN4Z9cSY1S1Jt7SXS2pXvcqlmUkwAhhv38w6o4Q2nxUfiGT0iDuvox5WWyP/M0fh/8A0MbD8o47UUaN2i3LlwSaqysv7ucb4ZO5n/agDX9J1S20toZ6br2mTLdv2826ptoy5aYayPvQ87xdUOpHAeHKPt2dtN626L6tSNh7S9MLtPnN0IqhbQHGklW72qXG/RebByD1HfHw9Lrj23ZPR63JbTuyaA/bDckj3NeSzKEuNfCJLuSokknPHOcx8jVzT/bV1rpFOp986cU51FPdW7LuynmrLiSpO6pJUHfenhw7wD0gCdOs901K1dnC77vtmcQzPyFJem5OYCQ4kKCcpVg8COUQb0/2kdrHV+gP2dp/Ks1KvNvKmJyuBhlkS7BGENjOEI9IKO8eJ6DgYlBflOuCkeTTrNJupos1qUs0sTjSlhZS4hoJUCocDjHSNeeTnk5ZGgVyTqWUh92uFC3McSEso3R6hk/HAGpTtAbU2zvqRTZPW1L1WpM4reWzNBpwOtg4Wph9vktOfenw4cYsMlrjpE1ZzN0pnW0Ul2TTPiacO6kMlG/vq8N05iIHlIGWvrL2i8UJLiKwtKVkcQCycgfEPiEezu52ot+SeDlNLhmPqMlASjmG91oL9m5vezMAaWuzas111o1Jm7R2caJMMU5nITNMy6VzDqQSO1W4v0WknoOHrMfLmdbNsfZ+rElUNWKa9WKJMOhBRPJadbc/IQ+zncXjOAc+oxtzyd0vb6dnarzUmln3XXWXET6h7/cDaC0D+Tgrx05xLKrylInaeGK1LSb8t2iVBubQlSN8HKThXDOcY8YA8vKaq26dBm9V6oibpVF9z/dB5ueaLbzKccUFJwSc8Bw45BHOIWI142rdou66i3ohSvcC35R3c7VPZIKB96HZhzhvkcd1I4d0bw27nJ5rY2qKZIqDSqlJomd0/wAn2mQD4bwTEadA67tfU7RCny+jtn0OdtftnlMzLjUsXFu757QrK3Aoqzw4jkB0gD1UttB7TWztfVNp+v8AS1Vq3Z5e752A2te6PfKZeb4KUnOShXPw5xPihVunXHbkjXaRMomZCeYRMS76OTjagCk/EYr31Qtrbi1dskWtemm9KekRMImUKlkyjbra08ilfanHAkHvBxEutmO2Lvs3Zhtq2L4klSVYkEOtLYW4hwto7RRQN5BIPAjrAG4IQhACEIQAhCEAIQhACEIQAhCEAIQhACEIQAhCEAIQhACEIQAhCEAIQhACEIQAhCEAIYEIQBwUkHpGgta9AJe8e2uW1G25WuBO86wRhE2B/ur8Y3/1jHAg9Y3KGQnoTJNXdoqfM1rNWOyzckTVCr+pUyo0eqPU+qSb8nNsKKHGnklKkn/P2R+UlOTVPqDM9JTDkvMMrC23WzhSCOREWF39pVaGolP7OuSATNJBDU8x6DzfgFdR4HMRYvjZpvi23nJmgoTX6fxIMuN15I/Kb6+yOu4jbGnfZ5G16D17+FSlXcFYru34eKG8tENcJW+5JFv3A43L3CwndyTupmwMekn8riMiN1rQ240W3UJWhQIKVDII6xWMBV7erTbpTOU2fllhSFLSWnGlA8DxwREztEdbpW/JFugXA4iXuJhGB0TNpH36e5XePbyinbUbMJVctyjxiXjwXXT9icxOV8qnkbHiTr+Rq/XnQVyhuzF5WfKk0xRLk5ItDeMsTzWgdUZ5jpEciPDHDkDn54tHcSh1CkKSlaVAghQyCCOURE150FXQ3Ji8rOlFKpqiXJuRaGTLE81oHVHeOkS2yW1q8Kd133VX/o0s1hNP9eBPehoKj1mp0Cty1XpE25KzkuvfbdQeKSP8jyicmjesVN1JoglJxTcpXpZAMxLH0Q6P5xvvHeOkQN3cq3cbx6AcfYI2VpxprqnVbik6zalMm6atlYW3UZnLLaO85PFQPcAcxYdrcXRuQLJK9GPTkupHYa1YgfuNTeavNCfM1KS07Juys0yh5l1JQ424nKVJPMEdREdZjZVpDuqfui3UCi2FHtlSCc9qF5/6MK+Ae/n08YkFSE1Juiyqau8w9PBtIfXLpKW1L6kA8hH0BgYHARx+nk7VFXJXk014Lp1LtPUisaLImuh06bTZKlUyXp1OlW5aVYQG22mxhKUgYAEd6OIxnPWOUaGqrxVdVNlERE0TkIQhA9EIQgD5F0W3Srus6p2zW5cTFOqMsuVmGz1SoYOPEcx6or0Xo7tR7L9+1Ga0dbmrjt2bWSBKspmkOJHvQ/Lk7wWAcbyRx74siwO6EAVyXHY22HtH2zN/XBp7tCodPl1zcvShLolTOzCUktoS0VbylE8MrIA9cby2HNNL60x0muOmX1bszRJuaqqX2mphSSVI7IJKhuk9REqcDOcce+MHlygCH+09spVq/b2a1V0qqDdOu9vcVMyy3uw85WgAIcbcHvHQABx4K4cRxjXEs/5Qqv04WfMsTNNYUOxdrEwmVZUlPIqL6SSeHVIzG2tq3SHWu7q7Q730muuoKfo5DqaAiZDIQ6k5D7PJKl9Clfs6xqka57dbkn9Tw0reTUcdl7oCiKCs4xvZKuzz48oA1jpjp69pv5TO1LJcrCq1OyE2hc7NpBwp5Uspx3nxwCTxPE8+sS8219Pbz1J2f6dQrHoEzWqi1WGphcuwpIKWw04Cr0iBjJA59Y8psubMl22hqNOax6uzYmbtnA4WJVTodXLqd9+66scCsg7oSOQJiX6MbgwIA1xs/wBvVi1NmazLduCQckanI01DMzLOkFTawTkHHDrGl9unTC/NT9PrUkLEtuarcxJ1F519qXKQUJLWATvEDGeESxjGATnAzAGsaRaNzzOybSLLlarN2xcQt2XkkzjOC5JPpZSk944EEHHjiIZUGb24NBjO2tIWnOXTT3JhbrUwqWVU2ypRyVtuJVvpBPEhQ5xY5gZziEAQV2c9A9X6vtMPa+6yyRpU2VuzDUm7uoeffWjcBLaSQ22kHgCcnAjZm1dsxPa0SElddoTTMleFLa7JrtVFCJxoHeCCoe9WCSUq8ceqT2B3QwM5xAFcctfO33blJRZQtaszS20dg3UHKW3MupGMAiYzunphRjc+yfoHqhYlyVbUPVG5qgmqVdKlLoonC6la1cVPTBB3S50AHLviWsYwO4QBCPWPR3Uu4vKNWrqBRbRnJy25N+mLmKkgoCGw2sleQVAnA8Ik5rFpbRdY9JalZVaWphMxh2Wm0DKpZ5PFDgHgeBHUExsDA48BxjMAVyUCkbaOzU1MWra1um5rbS6XJcMywnmBk8SgBQW3nmU8sx6Wzbd2z9XtX6Pdd4VafsClU1wHg2JZG4eKkolckuKUBjK+AzmJ7RjAzyEAa41yt+rXNsz3rbdDk3Z+qT1HelpaXRgKecKeA7skxqzYl06vXTTQ+r0W+LfmaNPvVhcw2w+UlSmy2gBXokjmDEm4QBFbbj00vrU7Si3aXYluzNam5aqKfeZlykFCOyIyd4gc43JprarrGzHbFmXXSylxNAYp9QkXscP4EIcbVg47xnMbEIB5gRnAzygCuWs7P20Xs4akT1yaCrm63QponDUqlLznZ5yGn5dXvynOAtHzR06pbO2htJT0nQb0p05blBaeS64uYlvc6XQofyhRnfdUOgHXuiybrDAPOANc/WmpVS2dk6TXPVahXpNdP8xmZ+ddK33Vc+03vhBQBHdgCIVU/Tja32Xa9UZPTKSVddsTLpWlMswJptzjgKUzkLbXjgd3IixvA7oQBXvLSe3DrreNI91kztgUynzCXxNJa8wbbUPvi3kreUBnCT6PHjE+qXKzUnQ5SUnZ5yfmWWUNuzTiQlTygAFLIHAEnJwO+O9gd0MCAEIQgBCEIAQhCAEIQgBCEIAQhCAEIQgBCEIAQhCAEIQgBCEIAQhCAEIQgBCEIAQhCAEIQgBCEIAYjG6IzCAPj1m1bcuFgtVyiSNQR3TDCVn4yMx4V/Z60vNTaqNPo0xSptlwONvSE0tooUOoGSB8UbShGzFcnibuseqJ21U+ToI3Lq5qan5MMBmXba7RxwoSBvuHKlY6k98ZdYaeQUOoCkqBSQeRB5iP0hGtr1PpoipoeTpOmVg0OdXOUu06XLzC1FZdDCSrJOc5PKPVpQlIASMAchGYRm+R7/Eupi1jW+FNBCEIwMxCEIAQhCAEIQgBCEIAQhCAEIQgBCEIAQhCAEIQgBCEIAQhCAEIQgBCEIAQhCAEIQgBCEIAQhCAEIQgBCEIAQhCAEIQgBCEIAQhCAEIQgBCEIAQhCAEIQgBCEIAQhCAEIQgBCEIAQhCAEIQgD//2Q==' };
+function osGridRef(lat, lon) { // WGS84 (GPS) → Ordnance Survey grid reference, e.g. "SP 21927 72811"; '' outside Great Britain
+  const r = Math.PI / 180;
+  let a = 6378137, b = 6356752.314245, e2 = 1 - b * b / (a * a);
+  let φ = lat * r, λ = lon * r, s = Math.sin(φ), c = Math.cos(φ), ν = a / Math.sqrt(1 - e2 * s * s);
+  const x = ν * c * Math.cos(λ), y = ν * c * Math.sin(λ), z = ν * (1 - e2) * s;
+  const tx = -446.448, ty = 125.157, tz = -542.060, sc = 20.4894e-6, rx = -0.1502 / 3600 * r, ry = -0.2470 / 3600 * r, rz = -0.8421 / 3600 * r; // Helmert: WGS84 → OSGB36
+  const x2 = tx + x * (1 + sc) - y * rz + z * ry, y2 = ty + x * rz + y * (1 + sc) - z * rx, z2 = tz - x * ry + y * rx + z * (1 + sc);
+  a = 6377563.396; b = 6356256.909; e2 = 1 - b * b / (a * a); // Airy 1830
+  const p = Math.hypot(x2, y2); φ = Math.atan2(z2, p * (1 - e2));
+  for (let i = 0; i < 10; i++) { const sφ = Math.sin(φ); ν = a / Math.sqrt(1 - e2 * sφ * sφ); φ = Math.atan2(z2 + e2 * ν * sφ, p); }
+  λ = Math.atan2(y2, x2);
+  const F0 = 0.9996012717, φ0 = 49 * r, λ0 = -2 * r, N0 = -100000, E0 = 400000, n = (a - b) / (a + b);
+  const sφ = Math.sin(φ), cφ = Math.cos(φ), tφ = Math.tan(φ);
+  ν = a * F0 / Math.sqrt(1 - e2 * sφ * sφ); const ρ = a * F0 * (1 - e2) / Math.pow(1 - e2 * sφ * sφ, 1.5), η2 = ν / ρ - 1;
+  const M = b * F0 * ((1 + n + 5 / 4 * n * n + 5 / 4 * n ** 3) * (φ - φ0) - (3 * n + 3 * n * n + 21 / 8 * n ** 3) * Math.sin(φ - φ0) * Math.cos(φ + φ0)
+    + (15 / 8 * n * n + 15 / 8 * n ** 3) * Math.sin(2 * (φ - φ0)) * Math.cos(2 * (φ + φ0)) - 35 / 24 * n ** 3 * Math.sin(3 * (φ - φ0)) * Math.cos(3 * (φ + φ0)));
+  const I = M + N0, II = ν / 2 * sφ * cφ, III = ν / 24 * sφ * cφ ** 3 * (5 - tφ ** 2 + 9 * η2), IIIA = ν / 720 * sφ * cφ ** 5 * (61 - 58 * tφ ** 2 + tφ ** 4);
+  const IV = ν * cφ, V = ν / 6 * cφ ** 3 * (ν / ρ - tφ ** 2), VI = ν / 120 * cφ ** 5 * (5 - 18 * tφ ** 2 + tφ ** 4 + 14 * η2 - 58 * tφ ** 2 * η2);
+  const dλ = λ - λ0, N = I + II * dλ ** 2 + III * dλ ** 4 + IIIA * dλ ** 6, E = E0 + IV * dλ + V * dλ ** 3 + VI * dλ ** 5;
+  const e100 = Math.floor(E / 100000), n100 = Math.floor(N / 100000);
+  if (e100 < 0 || e100 > 6 || n100 < 0 || n100 > 12) return '';
+  let l1 = (19 - n100) - (19 - n100) % 5 + Math.floor((e100 + 10) / 5), l2 = (19 - n100) * 5 % 25 + e100 % 5;
+  if (l1 > 7) l1++; if (l2 > 7) l2++;
+  const pad = v => String(Math.floor(v % 100000)).padStart(5, '0');
+  return `${String.fromCharCode(l1 + 65, l2 + 65)} ${pad(E)} ${pad(N)}`;
+}
+const LOC_TEXT = [['protocol', 'Protocol No'], ['locationName', 'Location Name'], ['cooperator', 'Co-operator']];
+const LOC_ADDR = [['postcode', 'Postal / Zip Code'], ['city', 'City'], ['county', 'County'], ['country', 'Country']];
+const autoProtocol = id => { const b = String(id || '').toUpperCase().split('-')[0]; return /^[A-Z]{2}/.test(b) ? 'EA' + b.slice(2) : b; }; // GB26X01007H-SMW01 → EA26X01007H
+const geoLL = t => { const cs = geoPts(t); return cs.find(c => c.lab === 'LL') || cs[0] || null; };
+function viewLocation(t) {
+  const L = t.loc || {}, cs = geoPts(t), pk = geoParking(t), ll = geoLL(t), os = ll ? osGridRef(ll.lat, ll.lon) : '';
+  const fld = ([k, label], ph) => `<label class="field"><span>${label}</span><input data-k="${k}" value="${esc(L[k] || '')}" placeholder="${ph || ''}" autocomplete="off"></label>`;
+  const sg = mySig();
+  app.innerHTML = `
+  <header class="top"><a class="back" href="#/trial/${t.id}">← ${esc(t.trialId)}</a><h1>Location Sheet</h1><a class="brand sm" href="#/" aria-label="FART – back to the home page"><b>FART</b><span>Field Assessment Recording Tool</span></a></header>
+  <main>
+    <p class="small muted">Fill this in once for the trial – it saves as you type. <b>Export</b> makes the one-page "Trial Location &amp; Directions" PDF with the coordinates and satellite maps.</p>
+    ${cs.length < 4 ? `<section class="card warnbox"><b>${cs.length ? `Only ${cs.length} of 4 corners recorded.` : 'No trial corners recorded yet.'}</b> Use <b>Walk the Trial</b> on the trial page to record the 4 corners${pk ? '' : ' and the parking / gate'} – they give the coordinates, grid reference and maps.</section>` : ''}
+    <section class="card"><h2>Trial</h2><div class="grid2">
+      <label class="field"><span>Trial Number</span><input value="${esc(t.trialId)}" disabled></label>
+      <label class="field"><span>Protocol No <span class="muted" style="font-weight:400">(from the Trial Number – change it if needed)</span></span><input data-k="protocol" value="${esc(L.protocol || autoProtocol(t.trialId))}" autocomplete="off" autocapitalize="characters" style="text-transform:uppercase"></label>
+      ${fld(LOC_TEXT[1], 'e.g. nearest town / farm')}${fld(LOC_TEXT[2])}
+    </div></section>
+    ${cs.length ? `<section class="card"><h2>Corners</h2>${cornerRowsHtml(t)}</section>` : ''}
+    ${cs.length || pk ? `<section class="card"><h2>Maps on the Sheet</h2>
+      <p class="small muted" style="margin:0">Drag to move, pinch to zoom (or use − and ＋). The sheet uses exactly what you see here. The satellite picture needs internet.</p>
+      ${locMapHtml('ov', 'Overview')}${locMapHtml('cu', 'Close-up')}</section>` : ''}
+    <section class="card"><div class="arow"><h2 style="margin:0">Address</h2><button type="button" class="small" id="loc-look">Look Up from GPS</button></div>
+      <p class="small muted" style="margin:6px 0 8px">Fills in the postcode, city, county and country from the ${pk ? 'parking / gate point' : 'trial location'} (UK only, needs internet). Check it and correct anything that is wrong.</p>
+      <div class="grid2">${LOC_ADDR.map(f => fld(f)).join('')}</div></section>
+    <section class="card"><h2>Grid Reference &amp; What3Words</h2>
+      <div class="grid2">
+        <label class="field"><span>OS Grid Ref <span class="muted" style="font-weight:400">(worked out from the LL corner)</span></span><input value="${esc(os || (ll ? 'Outside Great Britain' : 'Record the corners first'))}" disabled></label>
+        <span></span>
+        <label class="field"><span>What3Words Trial</span><span style="display:flex;gap:6px"><input data-k="w3wTrial" value="${esc(L.w3wTrial || '')}" placeholder="word.word.word" autocomplete="off" autocapitalize="off"><button type="button" class="small" data-w3w="trial" ${cs.length ? '' : 'disabled'}>Find</button></span></label>
+        <label class="field"><span>What3Words Parking</span><span style="display:flex;gap:6px"><input data-k="w3wParking" value="${esc(L.w3wParking || '')}" placeholder="word.word.word" autocomplete="off" autocapitalize="off"><button type="button" class="small" data-w3w="park" ${pk ? '' : 'disabled'}>Find</button></span></label>
+      </div>
+      <p class="small muted" style="margin:0"><b>Find</b> copies the coordinates and opens what3words, so you can read off the three words. Go back to return here – what you typed is kept.</p></section>
+    <section class="card"><h2>Directions</h2>
+      <textarea data-k="directions" rows="5" placeholder="e.g. Going up Birmingham Rd (A4141), turn into Manor Ln, then right into School Ln…">${esc(L.directions || '')}</textarea></section>
+    <section class="card"><h2>Date &amp; Signature</h2>
+      <div class="grid2"><label class="field"><span>Date on the Sheet</span><input data-k="date" value="${esc(L.date || '')}" placeholder="${dmy(today())} (today)" inputmode="numeric" autocomplete="off"></label></div>
+      <p class="small" style="margin:0 0 8px">${sg ? 'Signed with this device\'s signature.' : '<span class="muted">No signature on this device yet – the sheet gets a blank line to sign by hand.</span>'}</p>
+      <button type="button" class="small" id="loc-sig">${sg ? 'Change Signature' : 'Add Signature'}</button></section>
+    <div class="actions"><button class="primary" id="loc-pdf" type="button">Export Location Sheet (PDF)</button></div>
+    <p class="small muted" id="loc-msg"></p>
+  </main>`;
+  app.querySelectorAll('[data-k]').forEach(inp => inp.oninput = () => {
+    let v = inp.value; if (inp.dataset.k.startsWith('w3w')) v = v.replace(/^\/+/, '');
+    if (inp.dataset.k === 'protocol') v = v.toUpperCase();
+    t.loc = t.loc || {}; if (v.trim()) t.loc[inp.dataset.k] = v.trim(); else delete t.loc[inp.dataset.k];
+    t.updated = Date.now(); save();
+  });
+  app.querySelectorAll('[data-w3w]').forEach(b => b.onclick = () => {
+    const p = b.dataset.w3w === 'park' ? pk : ll; if (!p) return;
+    const ll6 = `${fmtCoord(p.lat)},${fmtCoord(p.lon)}`;
+    try { navigator.clipboard && navigator.clipboard.writeText(ll6); } catch (e) {}
+    flushDraft(); location.href = `https://what3words.com/${ll6}`; // opened in place, so no blank page is left behind; Back (or Done) returns here – everything typed is already saved
+  });
+  wireCornerPick(app, t, () => viewLocation(t));
+  wireLocMap(t, 'ov'); wireLocMap(t, 'cu');
+  document.getElementById('loc-sig').onclick = () => openSignaturePad(() => viewLocation(t));
+  const dIn = app.querySelector('[data-k="date"]');
+  dIn.onchange = () => { const v = dIn.value.trim(); if (!v) return; const iso = parseDmy(v); if (!iso) { toast('Type the date as DD/MM/YYYY'); return; } dIn.value = dmy(iso); t.loc.date = dmy(iso); save(); };
+  document.getElementById('loc-look').onclick = async () => {
+    const p = pk || ll, btn = document.getElementById('loc-look');
+    if (!p) { toast('Record the trial corners or the parking / gate first'); return; }
+    btn.disabled = true; btn.textContent = 'Looking up…';
+    try {
+      const r = await fetch(`https://api.postcodes.io/postcodes?lon=${p.lon}&lat=${p.lat}&radius=2000&limit=1`), j = await r.json(), x = j && j.result && j.result[0];
+      if (!x) { alert('No UK postcode found within 2 km of this point. Please type the address in.'); return; }
+      const got = { postcode: x.postcode || '', city: x.admin_district || '', county: x.admin_county || '', country: 'United Kingdom' };
+      const cur = t.loc || {}, diff = Object.keys(got).filter(k => got[k] && cur[k] && cur[k] !== got[k]);
+      if (diff.length && !confirm(`Replace what is already typed?\n\n${diff.map(k => `${k}: ${cur[k]} → ${got[k]}`).join('\n')}`)) return;
+      t.loc = { ...cur }; Object.keys(got).forEach(k => { if (got[k]) t.loc[k] = got[k]; });
+      t.updated = Date.now(); save(); viewLocation(t); toast(`Found ${got.postcode}${got.county ? '' : ' – please type the county'}`);
+    } catch (e) { alert('Could not look up the address – check the internet connection, or type it in.'); }
+    finally { const b2 = document.getElementById('loc-look'); if (b2) { b2.disabled = false; b2.textContent = 'Look Up from GPS'; } }
+  };
+  document.getElementById('loc-pdf').onclick = async () => {
+    const btn = document.getElementById('loc-pdf'), msg = document.getElementById('loc-msg');
+    btn.disabled = true; btn.textContent = 'Making the PDF (loading the maps)…';
+    try {
+      const r = await locationPdf(t);
+      downloadMany([{ blob: r.blob, name: r.name }]);
+      if (msg) msg.textContent = r.mapsOk ? '' : 'The satellite images could not be loaded (no internet?), so the maps show only the outline. Export again with a connection to include them.';
+    } catch (e) { alert('Could not make the location sheet: ' + e.message); }
+    finally { btn.disabled = false; btn.textContent = 'Export Location Sheet (PDF)'; }
+  };
+}
+/* satellite map drawn onto a canvas (so it can go into the PDF) */
+const loadImg = (url, ms) => new Promise(res => { const im = new Image(); im.crossOrigin = 'anonymous'; const tm = setTimeout(() => res(null), ms || 12000); im.onload = () => { clearTimeout(tm); res(im); }; im.onerror = () => { clearTimeout(tm); res(null); }; im.src = url; });
+async function mapJpeg(v, W, H, overlay) {
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#dfe7ef'; ctx.fillRect(0, 0, W, H);
+  let z = clamp(Math.ceil(Math.log2(v.k / 256)), 0, 19), n, xa, xb, ya, yb;
+  for (;;) { n = 2 ** z; xa = Math.floor((v.cx - W / 2 / v.k) * n); xb = Math.floor((v.cx + W / 2 / v.k) * n); ya = Math.max(0, Math.floor((v.cy - H / 2 / v.k) * n)); yb = Math.min(n - 1, Math.floor((v.cy + H / 2 / v.k) * n)); if ((xb - xa + 1) * (yb - ya + 1) <= 90 || z === 0) break; z--; }
+  const sz = v.k / n, jobs = [];
+  for (let ty = ya; ty <= yb; ty++) for (let tx = xa; tx <= xb; tx++) {
+    const wx = ((tx % n) + n) % n, x = W / 2 + (tx / n - v.cx) * v.k, y = H / 2 + (ty / n - v.cy) * v.k;
+    jobs.push(loadImg(`https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${ty}/${wx}`).then(im => { if (im) { ctx.drawImage(im, x, y, sz + 0.6, sz + 0.6); return 1; } return 0; }));
+  }
+  const ok = (await Promise.all(jobs)).reduce((a, b) => a + b, 0);
+  overlay(ctx);
+  ctx.font = `${Math.round(H / 40)}px Helvetica, Arial, sans-serif`; ctx.textAlign = 'right'; ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.fillStyle = '#fff';
+  if (ok) { ctx.strokeText('Imagery © Esri', W - 8, H - 8); ctx.fillText('Imagery © Esri', W - 8, H - 8); }
+  let data; try { data = cv.toDataURL('image/jpeg', 0.85); } catch (e) { data = null; }
+  return { data, ok: ok > 0, w: W, h: H };
+}
+function canvasCallout(ctx, label, color, tail, tip, sc, tipGap) { // a label tag with a smooth curved arrow to the spot
+  const W = ctx.canvas.width, H = ctx.canvas.height, fs = Math.round(15 * sc);
+  ctx.save(); ctx.font = `bold ${fs}px Helvetica, Arial, sans-serif`;
+  const ph = fs * 1.9, pw = ctx.measureText(label).width + fs * 1.7, px = clamp(tail.x - pw / 2, 8 * sc, W - pw - 8 * sc), py = clamp(tail.y - ph / 2, 8 * sc, H - ph - 8 * sc);
+  const down = tip.y > py + ph / 2, start = { x: px + pw / 2, y: down ? py + ph : py };
+  const cp = Math.abs(tip.x - start.x) < 20 * sc ? { x: (start.x + tip.x) / 2, y: (start.y + tip.y) / 2 } : { x: start.x, y: tip.y }; // a gentle elbow
+  let ang = Math.atan2(tip.y - cp.y, tip.x - cp.x);
+  const t2 = { x: tip.x - Math.cos(ang) * (tipGap || 0), y: tip.y - Math.sin(ang) * (tipGap || 0) }; // stop at the edge of a marker
+  ang = Math.atan2(t2.y - cp.y, t2.x - cp.x);
+  const hl = 26 * sc, hw = 19 * sc, end = { x: t2.x - Math.cos(ang) * hl * 0.7, y: t2.y - Math.sin(ang) * hl * 0.7 };
+  const path = () => { ctx.beginPath(); ctx.moveTo(start.x, start.y); ctx.quadraticCurveTo(cp.x, cp.y, end.x, end.y); };
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.shadowColor = 'rgba(0,0,0,.45)'; ctx.shadowBlur = 8 * sc; ctx.shadowOffsetY = 2 * sc;
+  path(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 9 * sc; ctx.stroke();
+  ctx.shadowColor = 'transparent'; path(); ctx.strokeStyle = color; ctx.lineWidth = 5 * sc; ctx.stroke();
+  ctx.save(); ctx.translate(t2.x, t2.y); ctx.rotate(ang); // arrow head
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-hl, -hw / 2); ctx.quadraticCurveTo(-hl * 0.72, 0, -hl, hw / 2); ctx.closePath();
+  ctx.shadowColor = 'rgba(0,0,0,.4)'; ctx.shadowBlur = 6 * sc; ctx.fillStyle = color; ctx.fill(); ctx.shadowColor = 'transparent'; ctx.lineWidth = 2.5 * sc; ctx.strokeStyle = '#fff'; ctx.stroke(); ctx.restore();
+  const r = ph / 2; ctx.beginPath(); ctx.moveTo(px + r, py); ctx.lineTo(px + pw - r, py); ctx.arc(px + pw - r, py + r, r, -Math.PI / 2, Math.PI / 2); ctx.lineTo(px + r, py + ph); ctx.arc(px + r, py + r, r, Math.PI / 2, Math.PI * 1.5); ctx.closePath(); // the tag
+  ctx.shadowColor = 'rgba(0,0,0,.45)'; ctx.shadowBlur = 10 * sc; ctx.shadowOffsetY = 3 * sc; ctx.fillStyle = color; ctx.fill();
+  ctx.shadowColor = 'transparent'; ctx.lineWidth = 2.5 * sc; ctx.strokeStyle = '#fff'; ctx.stroke();
+  ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(label, px + pw / 2, py + ph / 2 + 1);
+  ctx.restore();
+}
+function canvasOutline(ctx, P, labs, scale) {
+  if (P.length >= 2) { ctx.beginPath(); P.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); if (P.length >= 3) ctx.closePath();
+    ctx.lineJoin = 'round'; ctx.lineWidth = 7 * scale; ctx.strokeStyle = 'rgba(0,0,0,.55)'; ctx.stroke(); ctx.lineWidth = 4 * scale; ctx.strokeStyle = '#ffd400'; ctx.stroke(); }
+  if (labs) P.forEach(([x, y], i) => { const r = 15 * scale; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill(); ctx.lineWidth = 2 * scale; ctx.strokeStyle = '#000'; ctx.stroke();
+    ctx.fillStyle = '#000'; ctx.font = `bold ${Math.round(12 * scale)}px Helvetica, Arial, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(labs[i], x, y + 0.5); ctx.textBaseline = 'alphabetic'; });
+}
+function canvasP(ctx, x, y, scale) { const r = 15 * scale; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fillStyle = '#e8590c'; ctx.fill(); ctx.lineWidth = 3 * scale; ctx.strokeStyle = '#fff'; ctx.stroke();
+  ctx.fillStyle = '#fff'; ctx.font = `bold ${Math.round(16 * scale)}px Helvetica, Arial, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('P', x, y + 1); ctx.textBaseline = 'alphabetic'; }
+/* the two maps on the sheet: the same pixels in the preview (where they can be dragged and zoomed) and in the PDF */
+const LOC_MAP = { ov: { W: 567, H: 432 }, cu: { W: 1063, H: 484 } }; // twice the size they are printed at
+const invMercY = y => Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180 / Math.PI;
+const viewToStore = v => { const lat = invMercY(v.cy); return { lat, lon: v.cx * 360 - 180, m: v.W / v.k * worldM(lat) }; }; // centre + metres across, so it doesn't depend on screen size
+const viewFromStore = (st, W, H) => ({ cx: mercX(st.lon), cy: mercY(st.lat), k: W / (st.m / worldM(st.lat)), W, H, lat: st.lat });
+function locGeo(t) {
+  const cs = geoPts(t), pk = geoParking(t), all = [...cs, ...(pk ? [pk] : [])];
+  const cen = cs.length ? { lat: cs.reduce((s, c) => s + c.lat, 0) / cs.length, lon: cs.reduce((s, c) => s + c.lon, 0) / cs.length } : pk;
+  return { cs, pk, all, cen };
+}
+function locDefaultView(t, which) { // overview: about 2.2 km across; close-up: the trial and its gate with room around them
+  const g = locGeo(t), { W, H } = LOC_MAP[which]; if (!g.all.length) return null;
+  return which === 'ov' ? viewFromStore({ lat: g.cen.lat, lon: g.cen.lon, m: 2200 }, W, H) : fitView(g.all, W, H, 1.1);
+}
+function locView(t, which) { const st = t.loc && t.loc[which + 'View'], { W, H } = LOC_MAP[which]; return st && st.m ? viewFromStore(st, W, H) : locDefaultView(t, which); }
+function drawLocOverlay(ctx, t, which, v) {
+  const { cs, pk, cen } = locGeo(t), W = v.W, H = v.H;
+  if (which === 'ov') { // outline (tiny at this scale) with a red pin, and the gate
+    canvasOutline(ctx, cs.map(c => scr(v, c)), null, 1);
+    if (pk) { const [x, y] = scr(v, pk); canvasP(ctx, x, y, 1); }
+    if (!cen) return;
+    const [x, y] = scr(v, cen); ctx.beginPath(); ctx.arc(x, y - 22, 12, Math.PI * 0.85, Math.PI * 0.15); ctx.lineTo(x, y); ctx.closePath(); ctx.fillStyle = '#d93025'; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = '#fff'; ctx.stroke();
+    ctx.beginPath(); ctx.arc(x, y - 22, 4.5, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill();
+    return;
+  }
+  // close-up: outline, corner names, gate, and tags with arrows to them
+  canvasOutline(ctx, cs.map(c => scr(v, c)), cs.map(c => c.lab), 1.4);
+  if (pk) { const [x, y] = scr(v, pk); canvasP(ctx, x, y, 1.4); }
+  // the trial tag goes on the side away from the gate, so the two never cross; each sits above its target, or below it when the target is near the top
+  const c0 = cen ? scr(v, cen) : null, p0 = pk ? scr(v, pk) : null, trialLeft = !p0 || !c0 || p0[0] >= c0[0], sc = 1.6;
+  const tail = (x, y, left) => ({ x: left ? W * 0.2 : W * 0.8, y: y < H * 0.42 ? H - 34 : 34 });
+  if (cs.length) canvasCallout(ctx, t.trialId, '#0072CE', tail(c0[0], c0[1], trialLeft), { x: c0[0], y: c0[1] }, sc, 0);
+  if (p0) canvasCallout(ctx, 'Parking / Gate', '#e8590c', tail(p0[0], p0[1], !trialLeft), { x: p0[0], y: p0[1] }, sc, 24);
+}
+function locMapHtml(which, title) {
+  const { W, H } = LOC_MAP[which];
+  return `<div class="arow" style="margin-top:8px"><b>${title}</b><span style="display:flex;gap:6px"><button type="button" class="small" data-mz="${which}" data-f="0.5" aria-label="Zoom out">−</button><button type="button" class="small" data-mz="${which}" data-f="2" aria-label="Zoom in">＋</button><button type="button" class="small" data-mreset="${which}">Reset</button></span></div>
+    <div class="locmap" id="lm-${which}" style="aspect-ratio:${W} / ${H};${which === 'ov' ? 'max-width:420px' : ''}"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><g></g></svg><canvas width="${W}" height="${H}"></canvas></div>`;
+}
+function wireLocMap(t, which) {
+  const el = document.getElementById('lm-' + which); if (!el) return;
+  const g = el.querySelector('g'), cv = el.querySelector('canvas'), ctx = cv.getContext('2d');
+  let v = locView(t, which), timer = 0, raf = 0;
+  if (!v) return;
+  const draw = () => { tilesUpdate(g, v, 'sat'); ctx.clearRect(0, 0, cv.width, cv.height); drawLocOverlay(ctx, t, which, v); };
+  const keep = () => { clearTimeout(timer); timer = setTimeout(() => { t.loc = t.loc || {}; t.loc[which + 'View'] = viewToStore(v); t.updated = Date.now(); save(); }, 300); };
+  const pz = panZoom(el, () => v, nv => { v = nv; if (!raf) raf = requestAnimationFrame(() => { raf = 0; draw(); }); keep(); }, () => v.W / (el.clientWidth || v.W));
+  app.querySelectorAll(`[data-mz="${which}"]`).forEach(b => b.onclick = () => pz.zoomBy(+b.dataset.f));
+  app.querySelectorAll(`[data-mreset="${which}"]`).forEach(b => b.onclick = () => { clearTimeout(timer); if (t.loc) delete t.loc[which + 'View']; t.updated = Date.now(); save(); v = locDefaultView(t, which); draw(); });
+  draw();
+}
+async function locationPdf(t) {
+  const L = t.loc || {}, cs = geoPts(t), pk = geoParking(t), ll = geoLL(t), all = [...cs, ...(pk ? [pk] : [])];
+  const PW = 595.28, PH = 841.89, M = 28, R = PW - M;
+  // the two maps: a wide overview and a close-up of the trial and its gate, framed as set in the preview
+  const OV = { x: M + 250, y: 194, w: R - 6 - (M + 250), h: 216 }, CU = { x: M + 4, y: 440, w: R - M - 8, h: 242 };
+  let ov = null, cu = null;
+  if (all.length) {
+    const oV = locView(t, 'ov'), cV = locView(t, 'cu');
+    [ov, cu] = await Promise.all([mapJpeg(oV, oV.W, oV.H, ctx => drawLocOverlay(ctx, t, 'ov', oV)), mapJpeg(cV, cV.W, cV.H, ctx => drawLocOverlay(ctx, t, 'cu', cV))]);
+  }
+  // ---- PDF ----
+  const ops = [], f1 = n => (Math.round(n * 100) / 100).toString(), Y = y => f1(PH - y);
+  const text = (x, y, str, size, bold) => ops.push(`BT /${bold ? 'F2' : 'F1'} ${size} Tf ${f1(x)} ${Y(y)} Td (${pdfStr(str)}) Tj ET`);
+  const est = (str, size, bold) => String(str).length * size * (bold ? 0.56 : 0.5);
+  const fit = (str, w, size, bold) => { str = String(str ?? ''); const max = Math.max(1, Math.floor(w / (size * (bold ? 0.56 : 0.5)))); return str.length > max ? str.slice(0, Math.max(1, max - 2)) + '..' : str; };
+  const box = (x, y, w, h, lw) => ops.push(`0 G ${lw || 0.8} w ${f1(x)} ${Y(y + h)} ${f1(w)} ${f1(h)} re S`);
+  const image = (name, x, y, w, h) => ops.push(`q ${f1(w)} 0 0 ${f1(h)} ${f1(x)} ${Y(y + h)} cm /${name} Do Q`);
+  const wrap = (str, w, size) => { const cap = Math.max(10, Math.floor(w / (size * 0.5))), out = []; String(str || '').split(/\r?\n/).forEach(par => { let cur = ''; par.split(/\s+/).filter(Boolean).forEach(wd => { if ((cur + ' ' + wd).trim().length <= cap) cur = (cur + ' ' + wd).trim(); else { if (cur) out.push(cur); cur = wd; } }); out.push(cur); }); return out; };
+  // title and logo
+  text(M, 52, 'Trial Location & Directions', 22, true);
+  const lw = 150, lh = lw * LOGO_JPG.h / LOGO_JPG.w; image('Logo', R - lw, 24, lw, lh);
+  // details table
+  const os = ll ? osGridRef(ll.lat, ll.lon) : '';
+  const left = [['Protocol No:', L.protocol || autoProtocol(t.trialId)], ['Location Name:', L.locationName], ['City:', L.city], ['County:', L.county], ['Country:', L.country], ['Co-operator:', L.cooperator]];
+  const right = [['Trial Number:', t.trialId], ['Postal/Zip Code:', L.postcode], ['OS grid Ref:', os], ['What3Words Trial:', L.w3wTrial], ['What3Words Parking:', L.w3wParking]];
+  const RH = 19, T0 = 68;
+  left.forEach(([k, v], i) => { const y = T0 + i * RH; text(M, y + 13.5, k, 10, true); box(M + 98, y, 152, RH); text(M + 102, y + 13.5, fit(v || '', 146, 10), 10); });
+  right.forEach(([k, v], i) => { const y = T0 + i * RH, x = M + 262; text(x, y + 13.5, k, 10, true); box(x + 112, y, R - x - 112, RH); text(x + 116, y + 13.5, fit(v || '', R - x - 120, 10), 10); });
+  // box 1: coordinates + overview map
+  const B1 = { y: 188, h: 228 }; box(M, B1.y, R - M, B1.h);
+  let yy = B1.y + 16;
+  const cByLab = l => cs.find(c => c.lab === l), cTxt = c => c ? `${fmtCoord(c.lat)} , ${fmtCoord(c.lon)}` : '–';
+  if (cs.length === 4) {
+    text(M + 8, yy, 'LL Latitude (N): Longitude (E/W):', 10, true); text(M + 8, yy + 18, cTxt(cByLab('LL')), 14); yy += 42;
+    [['UL', 'Upper Left'], ['UR', 'Upper Right'], ['LR', 'Lower Right']].forEach(([l, nm]) => { text(M + 8, yy, nm, 10, true); text(M + 8, yy + 14, cTxt(cByLab(l)), 10); yy += 33; });
+  } else if (cs.length) {
+    text(M + 8, yy, 'Latitude (N): Longitude (E/W):', 10, true); yy += 18;
+    cs.forEach(c => { text(M + 8, yy, `Corner ${c.lab}: ${cTxt(c)}`, 10); yy += 16; });
+    text(M + 8, yy, `Only ${cs.length} of 4 corners recorded`, 8); yy += 16;
+  } else { text(M + 8, yy, 'Latitude (N): Longitude (E/W):', 10, true); text(M + 8, yy + 18, 'Not recorded – walk the trial in FART', 10); yy += 40; }
+  if (pk) { text(M + 8, yy, 'Parking / Gate', 10, true); text(M + 8, yy + 14, cTxt(pk), 10); yy += 33; }
+  const r = geoAccRange(all);
+  wrap(`Phone GPS (WGS84)${r ? ', ' + r : ''}. ± = GPS accuracy when each point was recorded.`, 235, 7).forEach(l => { if (yy < B1.y + B1.h - 6) { text(M + 8, yy, l, 7); yy += 9; } });
+  const imgs = [];
+  const place = (img, bx, name) => { if (!img || !img.data) return; image(name, bx.x, bx.y, bx.w, bx.h); imgs.push({ name, img }); };
+  place(ov, OV, 'Ov'); if (!ov) text(OV.x + 10, OV.y + OV.h / 2, 'No map – walk the trial in FART first', 9);
+  box(M, CU.y - 4, R - M, CU.h + 8); place(cu, CU, 'Cu'); if (!cu) text(CU.x + 10, CU.y + CU.h / 2, 'No map – walk the trial in FART first', 9);
+  // directions
+  const B3 = { y: CU.y + CU.h + 14, h: PH - M - 44 - (CU.y + CU.h + 14) }; box(M, B3.y, R - M, B3.h);
+  text(M + 8, B3.y + 14, 'Directions', 10, true);
+  const dl = wrap(L.directions || '', R - M - 16, 10), maxL = Math.floor((B3.h - 22) / 13);
+  dl.slice(0, maxL).forEach((l, i) => text(M + 8, B3.y + 29 + i * 13, l, 10));
+  // date, signature, page number
+  const yb = PH - M - 14, sg = mySig();
+  text(M, yb, 'Date:', 10, true); text(M + 32, yb, L.date || dmy(today()), 10);
+  text(M + 150, yb, 'Signed:', 10, true);
+  let sgx = null;
+  if (sg && sg.gray && sg.w && sg.h) { let sh = 28, sw = sh * sg.w / sg.h; if (sw > 170) { sw = 170; sh = sw * sg.h / sg.w; } image('Sig', M + 196, yb + 4 - sh, sw, sh); sgx = sg; }
+  else ops.push(`0 G 0.6 w ${f1(M + 196)} ${Y(yb + 2)} m ${f1(M + 366)} ${Y(yb + 2)} l S`);
+  text(R - est('Page 1 of 1', 9), PH - 16, 'Page 1 of 1', 9);
+  // ---- assemble ----
+  const content = ops.join('\n');
+  let out = '%PDF-1.4\n'; const offs = [];
+  const add = (n, body) => { offs[n] = out.length; out += `${n} 0 obj\n${body}\nendobj\n`; };
+  const jpgObj = (w, h, bin) => `<< /Type /XObject /Subtype /Image /Width ${w} /Height ${h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${bin.length} >>\nstream\n${bin}\nendstream`;
+  const xo = [{ name: 'Logo', w: LOGO_JPG.w, h: LOGO_JPG.h, bin: atob(LOGO_JPG.b64) }, ...imgs.map(({ name, img }) => ({ name, w: img.w, h: img.h, bin: atob(img.data.split(',')[1]) })),
+    ...(sgx ? [{ name: 'Sig', w: sgx.w, h: sgx.h, bin: atob(sgx.gray), gray: true }] : [])];
+  add(1, '<< /Type /Catalog /Pages 2 0 R >>');
+  add(2, '<< /Type /Pages /Kids [5 0 R] /Count 1 >>');
+  add(3, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
+  add(4, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>');
+  add(5, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PW} ${PH}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> /XObject << ${xo.map((x, i) => `/${x.name} ${7 + i} 0 R`).join(' ')} >> >> /Contents 6 0 R >>`);
+  add(6, `<< /Length ${content.length} >>\nstream\n${content}\nendstream`);
+  xo.forEach((x, i) => add(7 + i, x.gray ? `<< /Type /XObject /Subtype /Image /Width ${x.w} /Height ${x.h} /ColorSpace /DeviceGray /BitsPerComponent 8 /Length ${x.bin.length} >>\nstream\n${x.bin}\nendstream` : jpgObj(x.w, x.h, x.bin)));
+  const total = 6 + xo.length, xref = out.length;
+  out += `xref\n0 ${total + 1}\n0000000000 65535 f \n` + offs.slice(1).map(o => String(o).padStart(10, '0') + ' 00000 n \n').join('');
+  out += `trailer\n<< /Size ${total + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  return { blob: new Blob([Uint8Array.from(out, c => c.charCodeAt(0))], { type: 'application/pdf' }), name: `${t.trialId.replace(/[^\w.-]+/g, '_')}_Trial_Location.pdf`, mapsOk: !!(ov && ov.ok && cu && cu.ok) };
 }
 
 /* ---------- export chooser ---------- */
