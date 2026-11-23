@@ -238,6 +238,7 @@ body.locked { overflow:hidden; }
 .mappanel .actions button { min-height:38px; }
 .locmap { position:relative; width:100%; margin:6px 0 10px; background:#dfe7ef; border:1px solid var(--line); border-radius:10px; overflow:hidden; touch-action:none; user-select:none; -webkit-user-select:none; cursor:grab; }
 .locmap svg, .locmap canvas { position:absolute; inset:0; width:100%; height:100%; display:block; }
+.locmap svg.lnames { pointer-events:none; }
 #cs-chips .chip { min-height:40px; padding:.2rem .9rem; font-size:.95rem; }
 #cs-chips .chip.on { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
 .minimap { width:100%; max-width:440px; height:auto; display:block; border:1px solid var(--line); border-radius:10px; background:#eef3f8; }
@@ -2769,14 +2770,10 @@ function wireGeoCard(t, again) {
   if (cl) cl.onclick = () => { if (!confirm('Clear the recorded corner coordinates of this trial?')) return; delete t.geo; t.updated = Date.now(); save(); again(); };
 }
 /* map tiles kept as live elements, so dragging and pinching move them instead of reloading them */
-const tileUrl = (style, z, x, y) => style === 'map' ? `https://tile.openstreetmap.org/${z}/${x}/${y}.png`
-  : style === 'roads' ? `https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/${z}/${y}/${x}` // road lines and road names (transparent, goes over the satellite picture)
-  : style === 'places' ? `https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/${z}/${y}/${x}` // town, village and place names (transparent)
-  : `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
-const labelZoom = v => clamp(Math.floor(Math.log2(v.k / 256)), 0, 19); // names use the coarser tiles drawn larger, so they stay readable once printed
-function tilesUpdate(g, v, style, coarse) {
+const tileUrl = (style, z, x, y) => style === 'map' ? `https://tile.openstreetmap.org/${z}/${x}/${y}.png` : `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
+function tilesUpdate(g, v, style) {
   if (style === 'none') { g.innerHTML = ''; return; }
-  const z = coarse ? labelZoom(v) : clamp(Math.round(Math.log2(v.k / 256)), 0, 19), n = 2 ** z;
+  const z = clamp(Math.round(Math.log2(v.k / 256)), 0, 19), n = 2 ** z;
   const xa = Math.floor((v.cx - v.W / 2 / v.k) * n), xb = Math.floor((v.cx + v.W / 2 / v.k) * n), ya = Math.max(0, Math.floor((v.cy - v.H / 2 / v.k) * n)), yb = Math.min(n - 1, Math.floor((v.cy + v.H / 2 / v.k) * n));
   const wanted = new Set(), key = im => im.getAttribute('href') + '|' + im.dataset.tx;
   const have = new Map([...g.children].map(im => [key(im), im]));
@@ -3085,7 +3082,7 @@ function viewLocation(t) {
 }
 /* satellite map drawn onto a canvas (so it can go into the PDF) */
 const loadImg = (url, ms) => new Promise(res => { const im = new Image(); im.crossOrigin = 'anonymous'; const tm = setTimeout(() => res(null), ms || 12000); im.onload = () => { clearTimeout(tm); res(im); }; im.onerror = () => { clearTimeout(tm); res(null); }; im.src = url; });
-async function mapJpeg(v, W, H, overlay, names) { // names = also draw road and place names over the satellite picture
+async function mapJpeg(v, W, H, overlay, names) { // names = credit OpenStreetMap too (its roads are drawn by the overlay)
   const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const ctx = cv.getContext('2d');
   ctx.fillStyle = '#dfe7ef'; ctx.fillRect(0, 0, W, H);
   const layer = async (style, z0) => {
@@ -3101,11 +3098,10 @@ async function mapJpeg(v, W, H, overlay, names) { // names = also draw road and 
     return got.filter(g => g.im).length;
   };
   const ok = await layer('sat', clamp(Math.ceil(Math.log2(v.k / 256)), 0, 19));
-  if (names) { await layer('roads', labelZoom(v)); await layer('places', labelZoom(v)); }
   overlay(ctx);
-  const credit = names ? 'Imagery & names © Esri' : 'Imagery © Esri';
+  const credit = names ? 'Imagery © Esri · Roads & names © OpenStreetMap contributors' : 'Imagery © Esri';
   ctx.font = `${Math.round(H / 40)}px Helvetica, Arial, sans-serif`; ctx.textAlign = 'right'; ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.fillStyle = '#fff';
-  if (ok) { ctx.strokeText(credit, W - 8, H - 8); ctx.fillText(credit, W - 8, H - 8); }
+  if (ok || names) { ctx.strokeText(credit, W - 8, H - 8); ctx.fillText(credit, W - 8, H - 8); }
   let data; try { data = cv.toDataURL('image/jpeg', 0.85); } catch (e) { data = null; }
   return { data, ok: ok > 0, w: W, h: H };
 }
@@ -3132,6 +3128,9 @@ function canvasCallout(ctx, label, color, tail, tip, sc, tipGap) { // a label ta
   ctx.shadowColor = 'transparent'; ctx.lineWidth = 2.5 * sc; ctx.strokeStyle = '#fff'; ctx.stroke();
   ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(label, px + pw / 2, py + ph / 2 + 1);
   ctx.restore();
+  const keep = [{ x0: px - 6, y0: py - 6, x1: px + pw + 6, y1: py + ph + 6 }]; // the tag and its arrow, kept clear of map names
+  for (let k = 0; k <= 12; k++) { const u = k / 12, x = (1 - u) ** 2 * start.x + 2 * (1 - u) * u * cp.x + u * u * t2.x, y = (1 - u) ** 2 * start.y + 2 * (1 - u) * u * cp.y + u * u * t2.y, r = 12 * sc; keep.push({ x0: x - r, x1: x + r, y0: y - r, y1: y + r }); }
+  return keep;
 }
 function canvasOutline(ctx, P, labs, scale) {
   if (P.length >= 2) { ctx.beginPath(); P.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); if (P.length >= 3) ctx.closePath();
@@ -3160,36 +3159,51 @@ function drawLocOverlay(ctx, t, which, v) {
   const { cs, pk, cen } = locGeo(t), W = v.W, H = v.H;
   if (which === 'ov') { // outline (tiny at this scale) with a red pin, and the gate
     canvasOutline(ctx, cs.map(c => scr(v, c)), null, 1);
-    if (pk) { const [x, y] = scr(v, pk); canvasP(ctx, x, y, 1); }
-    if (!cen) return;
+    const keep = []; if (cs.length) keep.push(ptsBox(cs.map(c => scr(v, c)), 10));
+    if (pk) { const [x, y] = scr(v, pk); canvasP(ctx, x, y, 1); keep.push({ x0: x - 18, x1: x + 18, y0: y - 18, y1: y + 18 }); }
+    if (!cen) return keep;
     const [x, y] = scr(v, cen); ctx.beginPath(); ctx.arc(x, y - 22, 12, Math.PI * 0.85, Math.PI * 0.15); ctx.lineTo(x, y); ctx.closePath(); ctx.fillStyle = '#d93025'; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = '#fff'; ctx.stroke();
     ctx.beginPath(); ctx.arc(x, y - 22, 4.5, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill();
-    return;
+    keep.push({ x0: x - 16, x1: x + 16, y0: y - 38, y1: y + 2 });
+    return keep;
   }
   // close-up: outline, corner names, gate, and tags with arrows to them
   canvasOutline(ctx, cs.map(c => scr(v, c)), cs.map(c => c.lab), 1.4);
-  if (pk) { const [x, y] = scr(v, pk); canvasP(ctx, x, y, 1.4); }
+  const keep = []; if (cs.length) keep.push(ptsBox(cs.map(c => scr(v, c)), 24));
+  if (pk) { const [x, y] = scr(v, pk); canvasP(ctx, x, y, 1.4); keep.push({ x0: x - 24, x1: x + 24, y0: y - 24, y1: y + 24 }); }
   // the trial tag goes on the side away from the gate, so the two never cross; each sits above its target, or below it when the target is near the top
   const c0 = cen ? scr(v, cen) : null, p0 = pk ? scr(v, pk) : null, trialLeft = !p0 || !c0 || p0[0] >= c0[0], sc = 1.6;
   const tail = (x, y, left) => ({ x: left ? W * 0.2 : W * 0.8, y: y < H * 0.42 ? H - 34 : 34 });
-  if (cs.length) canvasCallout(ctx, t.trialId, '#0072CE', tail(c0[0], c0[1], trialLeft), { x: c0[0], y: c0[1] }, sc, 0);
-  if (p0) canvasCallout(ctx, 'Parking / Gate', '#e8590c', tail(p0[0], p0[1], !trialLeft), { x: p0[0], y: p0[1] }, sc, 24);
+  if (cs.length) keep.push(...canvasCallout(ctx, t.trialId, '#0072CE', tail(c0[0], c0[1], trialLeft), { x: c0[0], y: c0[1] }, sc, 0));
+  if (p0) keep.push(...canvasCallout(ctx, 'Parking / Gate', '#e8590c', tail(p0[0], p0[1], !trialLeft), { x: p0[0], y: p0[1] }, sc, 24));
+  return keep;
 }
+const ptsBox = (P, pad) => ({ x0: Math.min(...P.map(q => q[0])) - pad, x1: Math.max(...P.map(q => q[0])) + pad, y0: Math.min(...P.map(q => q[1])) - pad, y1: Math.max(...P.map(q => q[1])) + pad });
 const locNames = (t, which) => { const v = t.loc && t.loc[which + 'Names']; return v === undefined ? which === 'ov' : !!v; }; // overview: on unless switched off; close-up: off unless switched on
 function locMapHtml(which, title, t) {
   const { W, H } = LOC_MAP[which];
   return `<div class="arow" style="margin-top:8px"><b>${title}</b><label class="chk small" style="margin:0 auto 0 4px"><input type="checkbox" data-mnames="${which}" ${locNames(t, which) ? 'checked' : ''}> Road &amp; place names</label><span style="display:flex;gap:6px"><button type="button" class="small" data-mz="${which}" data-f="0.5" aria-label="Zoom out">−</button><button type="button" class="small" data-mz="${which}" data-f="2" aria-label="Zoom in">＋</button><button type="button" class="small" data-mreset="${which}">Reset</button></span></div>
-    <div class="locmap" id="lm-${which}" style="aspect-ratio:${W} / ${H};${which === 'ov' ? 'max-width:420px' : ''}"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><g class="lb"></g><g class="lr"></g><g class="lp"></g></svg><canvas width="${W}" height="${H}"></canvas></div>`;
+    <div class="locmap" id="lm-${which}" style="aspect-ratio:${W} / ${H};${which === 'ov' ? 'max-width:420px' : ''}"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><g class="lb"></g></svg><canvas width="${W}" height="${H}"></canvas><svg class="lnames" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"></svg></div>
+    <p class="small muted" id="lm-${which}-note" style="margin:-4px 0 6px"></p>`;
 }
 function wireLocMap(t, which) {
   const el = document.getElementById('lm-' + which); if (!el) return;
-  const g = el.querySelector('g.lb'), gr = el.querySelector('g.lr'), gp = el.querySelector('g.lp'), cv = el.querySelector('canvas'), ctx = cv.getContext('2d');
+  const g = el.querySelector('g.lb'), nm = el.querySelector('svg.lnames'), note = document.getElementById(`lm-${which}-note`), cv = el.querySelector('canvas'), ctx = cv.getContext('2d');
+  let asked = 0;
   let v = locView(t, which), timer = 0, raf = 0;
   if (!v) return;
   const draw = () => {
     tilesUpdate(g, v, 'sat');
-    if (locNames(t, which)) { tilesUpdate(gr, v, 'roads', true); tilesUpdate(gp, v, 'places', true); } else { gr.innerHTML = ''; gp.innerHTML = ''; }
-    ctx.clearRect(0, 0, cv.width, cv.height); drawLocOverlay(ctx, t, which, v);
+    const on = locNames(t, which), data = on ? osmHave(v) : null;
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    if (data) drawRoads(ctx, data, v);
+    const keepClear = drawLocOverlay(ctx, t, which, v);
+    nm.innerHTML = data ? labelsSvg(placeLabels(data, v, keepClear)) : '';
+    if (!on) { note.textContent = ''; return; }
+    if (data) { note.textContent = 'Roads & names: © OpenStreetMap contributors'; return; }
+    note.textContent = 'Loading road & place names…';
+    const me = ++asked; clearTimeout(draw.t);
+    draw.t = setTimeout(() => osmGet(v).then(() => { if (me === asked) draw(); }).catch(() => { if (me === asked) note.textContent = "Road & place names couldn't be loaded (no internet?). They are added when you export with a connection."; }), 500);
   };
   const nb = app.querySelector(`[data-mnames="${which}"]`);
   if (nb) nb.onchange = () => { t.loc = t.loc || {}; t.loc[which + 'Names'] = nb.checked; t.updated = Date.now(); save(); draw(); };
@@ -3199,6 +3213,89 @@ function wireLocMap(t, which) {
   app.querySelectorAll(`[data-mreset="${which}"]`).forEach(b => b.onclick = () => { clearTimeout(timer); if (t.loc) delete t.loc[which + 'View']; t.updated = Date.now(); save(); v = locDefaultView(t, which); draw(); });
   draw();
 }
+/* ---------- road and place names from OpenStreetMap, drawn as real text (sharp on screen and in the PDF) ---------- */
+const OSM_ENDPOINTS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+const osmStore = []; // { bb, data } already fetched this session; a view inside one of them needs no new request
+const osmPending = {};
+const viewBounds = v => ({ w: (v.cx - v.W / 2 / v.k) * 360 - 180, e: (v.cx + v.W / 2 / v.k) * 360 - 180, n: invMercY(v.cy - v.H / 2 / v.k), s: invMercY(v.cy + v.H / 2 / v.k) });
+const osmHave = v => { const b = viewBounds(v); const hit = osmStore.find(o => o.bb.s <= b.s && o.bb.n >= b.n && o.bb.w <= b.w && o.bb.e >= b.e && o.minor === (osmSpanM(v) < 6000)); return hit ? hit.data : null; };
+const osmSpanM = v => v.W / v.k * worldM(v.lat);
+function osmGet(v) { // resolves with the roads and places around this view (fetched once, with some room to pan)
+  const got = osmHave(v); if (got) return Promise.resolve(got);
+  const b = viewBounds(v), dx = (b.e - b.w) * 0.5, dy = (b.n - b.s) * 0.5, g = 0.01, minor = osmSpanM(v) < 6000;
+  const bb = { s: Math.floor((b.s - dy) / g) * g, w: Math.floor((b.w - dx) / g) * g, n: Math.ceil((b.n + dy) / g) * g, e: Math.ceil((b.e + dx) / g) * g };
+  const key = [bb.s, bb.w, bb.n, bb.e, minor].map(String).join(',');
+  if (osmPending[key]) return osmPending[key];
+  const box = `(${bb.s.toFixed(4)},${bb.w.toFixed(4)},${bb.n.toFixed(4)},${bb.e.toFixed(4)})`;
+  const hw = minor ? 'motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|track' : 'motorway|trunk|primary|secondary|tertiary|unclassified';
+  const q = `[out:json][timeout:25];(node["place"~"^(city|town|village|hamlet|suburb|neighbourhood|locality|farm|isolated_dwelling)$"]["name"]${box};way["highway"~"^(${hw})(_link)?$"]${box};);out geom qt;`;
+  const tryAt = i => fetch(OSM_ENDPOINTS[i], { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(q) })
+    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .catch(e => { if (i + 1 < OSM_ENDPOINTS.length) return tryAt(i + 1); throw e; });
+  return (osmPending[key] = tryAt(0).then(data => { osmStore.push({ bb, data, minor }); if (osmStore.length > 12) osmStore.shift(); return data; }).finally(() => { delete osmPending[key]; }));
+}
+const ROAD_STYLE = { // drawn in the map's pixels (twice the printed size)
+  major: { c: 'rgba(255,201,77,.95)', w: 6 }, mid: { c: 'rgba(255,224,138,.92)', w: 4.4 }, minor: { c: 'rgba(255,255,255,.85)', w: 3 },
+  service: { c: 'rgba(255,255,255,.7)', w: 2 }, track: { c: 'rgba(255,255,255,.75)', w: 1.8, dash: [7, 5] },
+};
+const roadClass = hw => /^(motorway|trunk|primary)/.test(hw) ? 'major' : /^(secondary|tertiary)/.test(hw) ? 'mid' : hw === 'track' ? 'track' : hw === 'service' ? 'service' : 'minor';
+function drawRoads(ctx, data, v) { // road lines go into the picture, under the trial outline, pins and tags
+  const ways = (data.elements || []).filter(e => e.type === 'way' && e.geometry), order = ['track', 'service', 'minor', 'mid', 'major'];
+  ctx.save(); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  order.forEach(cl => { const st = ROAD_STYLE[cl];
+    ways.filter(w => roadClass(w.tags.highway) === cl).forEach(w => {
+      ctx.beginPath(); w.geometry.forEach((p, i) => { const [x, y] = scr(v, p); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+      ctx.setLineDash(st.dash || []); ctx.lineWidth = st.w + 2.4; ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.stroke();
+      ctx.lineWidth = st.w; ctx.strokeStyle = st.c; ctx.stroke();
+    }); });
+  ctx.restore();
+}
+const PLACE_RANK = { city: [0, 34], town: [1, 30], village: [2, 26], suburb: [3, 22], hamlet: [4, 22], neighbourhood: [5, 19], locality: [6, 18], farm: [7, 18], isolated_dwelling: [8, 17] };
+let measureCtx = null;
+const textW = (s, size) => { measureCtx = measureCtx || document.createElement('canvas').getContext('2d'); measureCtx.font = `bold ${size}px Helvetica, Arial, sans-serif`; return measureCtx.measureText(s).width; };
+function placeLabels(data, v, reserved) { // names that fit without covering each other, the trial, the pins or the tags
+  const W = v.W, H = v.H, boxes = (reserved || []).slice(), out = [];
+  const free = b => b.x0 >= 2 && b.y0 >= 2 && b.x1 <= W - 2 && b.y1 <= H - 2 && !boxes.some(o => b.x0 < o.x1 && b.x1 > o.x0 && b.y0 < o.y1 && b.y1 > o.y0);
+  const els = (data && data.elements) || [];
+  els.filter(e => e.type === 'node' && PLACE_RANK[e.tags.place]).sort((a, b) => PLACE_RANK[a.tags.place][0] - PLACE_RANK[b.tags.place][0]).forEach(e => {
+    const size = PLACE_RANK[e.tags.place][1], [x, y] = scr(v, e), w = textW(e.tags.name, size), b = { x0: x - w / 2 - 6, x1: x + w / 2 + 6, y0: y - size * 0.7, y1: y + size * 0.7 };
+    if (free(b)) { boxes.push(b); out.push({ x, y, a: 0, s: e.tags.name, size }); }
+  });
+  // road names: each name once, on the longest stretch of that road that is in view, turned to follow it
+  const runs = {};
+  els.filter(e => e.type === 'way' && e.geometry && (e.tags.name || e.tags.ref)).forEach(e => {
+    const nm = e.tags.name ? (e.tags.ref && /^(motorway|trunk|primary)/.test(e.tags.highway) ? `${e.tags.name} (${e.tags.ref})` : e.tags.name) : e.tags.ref;
+    const P = e.geometry.map(p => scr(v, p)), m = 12;
+    const clip = (a, b) => { // the part of a→b inside the map (Liang–Barsky), or null
+      let t0 = 0, t1 = 1; const dx = b[0] - a[0], dy = b[1] - a[1];
+      for (const [pp, qq] of [[-dx, a[0] - m], [dx, W - m - a[0]], [-dy, a[1] - m], [dy, H - m - a[1]]]) {
+        if (pp === 0) { if (qq < 0) return null; continue; }
+        const r = qq / pp; if (pp < 0) { if (r > t1) return null; if (r > t0) t0 = r; } else { if (r < t0) return null; if (r < t1) t1 = r; }
+      }
+      return [[a[0] + t0 * dx, a[1] + t0 * dy], [a[0] + t1 * dx, a[1] + t1 * dy], t1 < 1];
+    };
+    let cur = [];
+    const flush = () => { if (cur.length > 1) { const len = cur.reduce((s, q, i) => i ? s + Math.hypot(q[0] - cur[i - 1][0], q[1] - cur[i - 1][1]) : 0, 0); if (!runs[nm] || runs[nm].len < len) runs[nm] = { pts: cur, len, cl: roadClass(e.tags.highway) }; } cur = []; };
+    for (let i = 1; i < P.length; i++) { const c = clip(P[i - 1], P[i]); if (!c) { flush(); continue; } if (!cur.length) cur.push(c[0]); cur.push(c[1]); if (c[2]) flush(); }
+    flush();
+  });
+  const clRank = { major: 0, mid: 1, minor: 2, service: 3, track: 4 };
+  Object.entries(runs).sort((a, b) => clRank[a[1].cl] - clRank[b[1].cl] || b[1].len - a[1].len).forEach(([nm, r]) => {
+    const size = r.cl === 'major' ? 17 : 15, w = textW(nm, size); if (r.len < w + 24) return;
+    const at = dist => { let acc = 0; for (let i = 1; i < r.pts.length; i++) { const a = r.pts[i - 1], b = r.pts[i], d = Math.hypot(b[0] - a[0], b[1] - a[1]); if (acc + d >= dist) { const f = (dist - acc) / (d || 1); return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]; } acc += d; } return r.pts[r.pts.length - 1]; };
+    for (const fr of [0.5, 0.35, 0.65, 0.2, 0.8]) { // the middle of the stretch first, then other spots along it if something is in the way
+      const c = r.len * fr; if (c - w / 2 < 4 || c + w / 2 > r.len - 4) continue;
+      const mid = at(c), p1 = at(c - w / 2), p2 = at(c + w / 2);
+      let ang = Math.atan2(p2[1] - p1[1], p2[0] - p1[0]) * 180 / Math.PI; if (ang > 90) ang -= 180; if (ang < -90) ang += 180;
+      const rad = ang * Math.PI / 180, cx = Math.abs(Math.cos(rad)), sy = Math.abs(Math.sin(rad)), hw = (w / 2 + 4) * cx + size * 0.6 * sy, hh = (w / 2 + 4) * sy + size * 0.6 * cx;
+      const b = { x0: mid[0] - hw, x1: mid[0] + hw, y0: mid[1] - hh, y1: mid[1] + hh };
+      if (free(b)) { boxes.push(b); out.push({ x: mid[0], y: mid[1], a: ang, s: nm, size, road: true }); break; }
+    }
+  });
+  return out;
+}
+const labelsSvg = labels => labels.map(l => `<text x="${l.x.toFixed(1)}" y="${(l.y + l.size * 0.35).toFixed(1)}" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-weight="700" font-size="${l.size}" fill="#fff" stroke="#1a1a1a" stroke-width="${(l.size * 0.17).toFixed(1)}" stroke-linejoin="round" paint-order="stroke"${l.a ? ` transform="rotate(${l.a.toFixed(1)} ${l.x.toFixed(1)} ${l.y.toFixed(1)})"` : ''}>${esc(l.s)}</text>`).join('');
+
 async function locationPdf(t) {
   const L = t.loc || {}, cs = geoPts(t), pk = geoParking(t), ll = geoLL(t), all = [...cs, ...(pk ? [pk] : [])];
   const PW = 595.28, PH = 841.89, M = 28, R = PW - M;
@@ -3207,7 +3304,10 @@ async function locationPdf(t) {
   let ov = null, cu = null;
   if (all.length) {
     const oV = locView(t, 'ov'), cV = locView(t, 'cu');
-    [ov, cu] = await Promise.all([mapJpeg(oV, oV.W, oV.H, ctx => drawLocOverlay(ctx, t, 'ov', oV), locNames(t, 'ov')), mapJpeg(cV, cV.W, cV.H, ctx => drawLocOverlay(ctx, t, 'cu', cV), locNames(t, 'cu'))]);
+    const net = async (vv, which) => locNames(t, which) ? osmGet(vv).catch(() => null) : null;
+    const [oN, cN] = await Promise.all([net(oV, 'ov'), net(cV, 'cu')]);
+    const one = async (vv, which, data) => { let keep = []; const img = await mapJpeg(vv, vv.W, vv.H, ctx => { if (data) drawRoads(ctx, data, vv); keep = drawLocOverlay(ctx, t, which, vv); }, !!data); img.labels = data ? placeLabels(data, vv, keep) : []; return img; };
+    [ov, cu] = await Promise.all([one(oV, 'ov', oN), one(cV, 'cu', cN)]);
   }
   // ---- PDF ----
   const ops = [], f1 = n => (Math.round(n * 100) / 100).toString(), Y = y => f1(PH - y);
@@ -3243,7 +3343,17 @@ async function locationPdf(t) {
   const r = geoAccRange(all);
   wrap(`Phone GPS (WGS84)${r ? ', ' + r : ''}. ± = GPS accuracy when each point was recorded.`, 235, 7).forEach(l => { if (yy < B1.y + B1.h - 6) { text(M + 8, yy, l, 7); yy += 9; } });
   const imgs = [];
-  const place = (img, bx, name) => { if (!img || !img.data) return; image(name, bx.x, bx.y, bx.w, bx.h); imgs.push({ name, img }); };
+  const place = (img, bx, name) => { if (!img || !img.data) return; image(name, bx.x, bx.y, bx.w, bx.h); imgs.push({ name, img }); names(img, bx); };
+  const names = (img, bx) => { // map names as real text (white with a dark edge), kept inside the map
+    if (!img.labels || !img.labels.length) return;
+    const f = bx.w / img.w; ops.push(`q ${f1(bx.x)} ${Y(bx.y + bx.h)} ${f1(bx.w)} ${f1(bx.h)} re W n 1 j`);
+    img.labels.forEach(l => {
+      const sz = l.size * f, w = textW(l.s, l.size) * f, th = -l.a * Math.PI / 180, c = Math.cos(th), sn = Math.sin(th), px = bx.x + l.x * f, py = PH - (bx.y + l.y * f);
+      const tx = px + c * (-w / 2) - sn * (-0.35 * sz), ty = py + sn * (-w / 2) + c * (-0.35 * sz), tm = `${f1(c)} ${f1(sn)} ${f1(-sn)} ${f1(c)} ${f1(tx)} ${f1(ty)} Tm`, str = pdfStr(l.s);
+      ops.push(`BT /F2 ${f1(sz)} Tf ${tm} 1 Tr 0.1 0.1 0.1 RG ${f1(sz * 0.17)} w (${str}) Tj ET`, `BT /F2 ${f1(sz)} Tf ${tm} 0 Tr 1 1 1 rg (${str}) Tj ET`);
+    });
+    ops.push('0 g 0 G Q');
+  };
   place(ov, OV, 'Ov'); if (!ov) text(OV.x + 10, OV.y + OV.h / 2, 'No map – walk the trial in FART first', 9);
   box(M, CU.y - 4, R - M, CU.h + 8); place(cu, CU, 'Cu'); if (!cu) text(CU.x + 10, CU.y + CU.h / 2, 'No map – walk the trial in FART first', 9);
   // directions
