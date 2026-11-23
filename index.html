@@ -2769,14 +2769,19 @@ function wireGeoCard(t, again) {
   if (cl) cl.onclick = () => { if (!confirm('Clear the recorded corner coordinates of this trial?')) return; delete t.geo; t.updated = Date.now(); save(); again(); };
 }
 /* map tiles kept as live elements, so dragging and pinching move them instead of reloading them */
-function tilesUpdate(g, v, style) {
+const tileUrl = (style, z, x, y) => style === 'map' ? `https://tile.openstreetmap.org/${z}/${x}/${y}.png`
+  : style === 'roads' ? `https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/${z}/${y}/${x}` // road lines and road names (transparent, goes over the satellite picture)
+  : style === 'places' ? `https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/${z}/${y}/${x}` // town, village and place names (transparent)
+  : `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
+const labelZoom = v => clamp(Math.floor(Math.log2(v.k / 256)), 0, 19); // names use the coarser tiles drawn larger, so they stay readable once printed
+function tilesUpdate(g, v, style, coarse) {
   if (style === 'none') { g.innerHTML = ''; return; }
-  const z = clamp(Math.round(Math.log2(v.k / 256)), 0, 19), n = 2 ** z;
+  const z = coarse ? labelZoom(v) : clamp(Math.round(Math.log2(v.k / 256)), 0, 19), n = 2 ** z;
   const xa = Math.floor((v.cx - v.W / 2 / v.k) * n), xb = Math.floor((v.cx + v.W / 2 / v.k) * n), ya = Math.max(0, Math.floor((v.cy - v.H / 2 / v.k) * n)), yb = Math.min(n - 1, Math.floor((v.cy + v.H / 2 / v.k) * n));
   const wanted = new Set(), key = im => im.getAttribute('href') + '|' + im.dataset.tx;
   const have = new Map([...g.children].map(im => [key(im), im]));
   if ((xb - xa + 1) * (yb - ya + 1) <= 48) for (let ty = ya; ty <= yb; ty++) for (let tx = xa; tx <= xb; tx++) {
-    const wx = ((tx % n) + n) % n, url = style === 'map' ? `https://tile.openstreetmap.org/${z}/${wx}/${ty}.png` : `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${ty}/${wx}`, k = url + '|' + tx;
+    const wx = ((tx % n) + n) % n, url = tileUrl(style, z, wx, ty), k = url + '|' + tx;
     wanted.add(k);
     if (!have.has(k)) {
       const im = document.createElementNS('http://www.w3.org/2000/svg', 'image');
@@ -3011,7 +3016,7 @@ function viewLocation(t) {
     ${cs.length ? `<section class="card"><h2>Corners</h2><svg class="minimap" id="loc-cornmap" viewBox="0 0 320 220" style="margin:0 0 10px" role="img" aria-label="The trial with its numbered corners"></svg>${cornerRowsHtml(t)}</section>` : ''}
     ${cs.length || pk ? `<section class="card"><h2>Maps on the Sheet</h2>
       <p class="small muted" style="margin:0">Drag to move, pinch to zoom (or use − and ＋). The sheet uses exactly what you see here. The satellite picture needs internet.</p>
-      ${locMapHtml('ov', 'Overview')}${locMapHtml('cu', 'Close-up')}</section>` : ''}
+      ${locMapHtml('ov', 'Overview', t)}${locMapHtml('cu', 'Close-up', t)}</section>` : ''}
     <section class="card"><div class="arow"><h2 style="margin:0">Address</h2><button type="button" class="small" id="loc-look">Look Up from GPS</button></div>
       <p class="small muted" style="margin:6px 0 8px">Fills in the postcode, city, county and country from the ${pk ? 'parking / gate point' : 'trial location'} (UK only, needs internet). Check it and correct anything that is wrong.</p>
       <div class="grid2">${LOC_ADDR.map(f => fld(f)).join('')}</div></section>
@@ -3080,20 +3085,27 @@ function viewLocation(t) {
 }
 /* satellite map drawn onto a canvas (so it can go into the PDF) */
 const loadImg = (url, ms) => new Promise(res => { const im = new Image(); im.crossOrigin = 'anonymous'; const tm = setTimeout(() => res(null), ms || 12000); im.onload = () => { clearTimeout(tm); res(im); }; im.onerror = () => { clearTimeout(tm); res(null); }; im.src = url; });
-async function mapJpeg(v, W, H, overlay) {
+async function mapJpeg(v, W, H, overlay, names) { // names = also draw road and place names over the satellite picture
   const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const ctx = cv.getContext('2d');
   ctx.fillStyle = '#dfe7ef'; ctx.fillRect(0, 0, W, H);
-  let z = clamp(Math.ceil(Math.log2(v.k / 256)), 0, 19), n, xa, xb, ya, yb;
-  for (;;) { n = 2 ** z; xa = Math.floor((v.cx - W / 2 / v.k) * n); xb = Math.floor((v.cx + W / 2 / v.k) * n); ya = Math.max(0, Math.floor((v.cy - H / 2 / v.k) * n)); yb = Math.min(n - 1, Math.floor((v.cy + H / 2 / v.k) * n)); if ((xb - xa + 1) * (yb - ya + 1) <= 90 || z === 0) break; z--; }
-  const sz = v.k / n, jobs = [];
-  for (let ty = ya; ty <= yb; ty++) for (let tx = xa; tx <= xb; tx++) {
-    const wx = ((tx % n) + n) % n, x = W / 2 + (tx / n - v.cx) * v.k, y = H / 2 + (ty / n - v.cy) * v.k;
-    jobs.push(loadImg(`https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${ty}/${wx}`).then(im => { if (im) { ctx.drawImage(im, x, y, sz + 0.6, sz + 0.6); return 1; } return 0; }));
-  }
-  const ok = (await Promise.all(jobs)).reduce((a, b) => a + b, 0);
+  const layer = async (style, z0) => {
+    let z = z0, n, xa, xb, ya, yb;
+    for (;;) { n = 2 ** z; xa = Math.floor((v.cx - W / 2 / v.k) * n); xb = Math.floor((v.cx + W / 2 / v.k) * n); ya = Math.max(0, Math.floor((v.cy - H / 2 / v.k) * n)); yb = Math.min(n - 1, Math.floor((v.cy + H / 2 / v.k) * n)); if ((xb - xa + 1) * (yb - ya + 1) <= 90 || z === 0) break; z--; }
+    const sz = v.k / n, jobs = [];
+    for (let ty = ya; ty <= yb; ty++) for (let tx = xa; tx <= xb; tx++) {
+      const x = W / 2 + (tx / n - v.cx) * v.k, y = H / 2 + (ty / n - v.cy) * v.k;
+      jobs.push(loadImg(tileUrl(style, z, ((tx % n) + n) % n, ty)).then(im => ({ im, x, y })));
+    }
+    const got = await Promise.all(jobs); // drawn once all have arrived, so this layer sits wholly on top of the one before
+    got.forEach(({ im, x, y }) => { if (im) ctx.drawImage(im, x, y, sz + 0.6, sz + 0.6); });
+    return got.filter(g => g.im).length;
+  };
+  const ok = await layer('sat', clamp(Math.ceil(Math.log2(v.k / 256)), 0, 19));
+  if (names) { await layer('roads', labelZoom(v)); await layer('places', labelZoom(v)); }
   overlay(ctx);
+  const credit = names ? 'Imagery & names © Esri' : 'Imagery © Esri';
   ctx.font = `${Math.round(H / 40)}px Helvetica, Arial, sans-serif`; ctx.textAlign = 'right'; ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.fillStyle = '#fff';
-  if (ok) { ctx.strokeText('Imagery © Esri', W - 8, H - 8); ctx.fillText('Imagery © Esri', W - 8, H - 8); }
+  if (ok) { ctx.strokeText(credit, W - 8, H - 8); ctx.fillText(credit, W - 8, H - 8); }
   let data; try { data = cv.toDataURL('image/jpeg', 0.85); } catch (e) { data = null; }
   return { data, ok: ok > 0, w: W, h: H };
 }
@@ -3163,17 +3175,24 @@ function drawLocOverlay(ctx, t, which, v) {
   if (cs.length) canvasCallout(ctx, t.trialId, '#0072CE', tail(c0[0], c0[1], trialLeft), { x: c0[0], y: c0[1] }, sc, 0);
   if (p0) canvasCallout(ctx, 'Parking / Gate', '#e8590c', tail(p0[0], p0[1], !trialLeft), { x: p0[0], y: p0[1] }, sc, 24);
 }
-function locMapHtml(which, title) {
+const locNames = (t, which) => { const v = t.loc && t.loc[which + 'Names']; return v === undefined ? which === 'ov' : !!v; }; // overview: on unless switched off; close-up: off unless switched on
+function locMapHtml(which, title, t) {
   const { W, H } = LOC_MAP[which];
-  return `<div class="arow" style="margin-top:8px"><b>${title}</b><span style="display:flex;gap:6px"><button type="button" class="small" data-mz="${which}" data-f="0.5" aria-label="Zoom out">−</button><button type="button" class="small" data-mz="${which}" data-f="2" aria-label="Zoom in">＋</button><button type="button" class="small" data-mreset="${which}">Reset</button></span></div>
-    <div class="locmap" id="lm-${which}" style="aspect-ratio:${W} / ${H};${which === 'ov' ? 'max-width:420px' : ''}"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><g></g></svg><canvas width="${W}" height="${H}"></canvas></div>`;
+  return `<div class="arow" style="margin-top:8px"><b>${title}</b><label class="chk small" style="margin:0 auto 0 4px"><input type="checkbox" data-mnames="${which}" ${locNames(t, which) ? 'checked' : ''}> Road &amp; place names</label><span style="display:flex;gap:6px"><button type="button" class="small" data-mz="${which}" data-f="0.5" aria-label="Zoom out">−</button><button type="button" class="small" data-mz="${which}" data-f="2" aria-label="Zoom in">＋</button><button type="button" class="small" data-mreset="${which}">Reset</button></span></div>
+    <div class="locmap" id="lm-${which}" style="aspect-ratio:${W} / ${H};${which === 'ov' ? 'max-width:420px' : ''}"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><g class="lb"></g><g class="lr"></g><g class="lp"></g></svg><canvas width="${W}" height="${H}"></canvas></div>`;
 }
 function wireLocMap(t, which) {
   const el = document.getElementById('lm-' + which); if (!el) return;
-  const g = el.querySelector('g'), cv = el.querySelector('canvas'), ctx = cv.getContext('2d');
+  const g = el.querySelector('g.lb'), gr = el.querySelector('g.lr'), gp = el.querySelector('g.lp'), cv = el.querySelector('canvas'), ctx = cv.getContext('2d');
   let v = locView(t, which), timer = 0, raf = 0;
   if (!v) return;
-  const draw = () => { tilesUpdate(g, v, 'sat'); ctx.clearRect(0, 0, cv.width, cv.height); drawLocOverlay(ctx, t, which, v); };
+  const draw = () => {
+    tilesUpdate(g, v, 'sat');
+    if (locNames(t, which)) { tilesUpdate(gr, v, 'roads', true); tilesUpdate(gp, v, 'places', true); } else { gr.innerHTML = ''; gp.innerHTML = ''; }
+    ctx.clearRect(0, 0, cv.width, cv.height); drawLocOverlay(ctx, t, which, v);
+  };
+  const nb = app.querySelector(`[data-mnames="${which}"]`);
+  if (nb) nb.onchange = () => { t.loc = t.loc || {}; t.loc[which + 'Names'] = nb.checked; t.updated = Date.now(); save(); draw(); };
   const keep = () => { clearTimeout(timer); timer = setTimeout(() => { t.loc = t.loc || {}; t.loc[which + 'View'] = viewToStore(v); t.updated = Date.now(); save(); }, 300); };
   const pz = panZoom(el, () => v, nv => { v = nv; if (!raf) raf = requestAnimationFrame(() => { raf = 0; draw(); }); keep(); }, () => v.W / (el.clientWidth || v.W));
   app.querySelectorAll(`[data-mz="${which}"]`).forEach(b => b.onclick = () => pz.zoomBy(+b.dataset.f));
@@ -3188,7 +3207,7 @@ async function locationPdf(t) {
   let ov = null, cu = null;
   if (all.length) {
     const oV = locView(t, 'ov'), cV = locView(t, 'cu');
-    [ov, cu] = await Promise.all([mapJpeg(oV, oV.W, oV.H, ctx => drawLocOverlay(ctx, t, 'ov', oV)), mapJpeg(cV, cV.W, cV.H, ctx => drawLocOverlay(ctx, t, 'cu', cV))]);
+    [ov, cu] = await Promise.all([mapJpeg(oV, oV.W, oV.H, ctx => drawLocOverlay(ctx, t, 'ov', oV), locNames(t, 'ov')), mapJpeg(cV, cV.W, cV.H, ctx => drawLocOverlay(ctx, t, 'cu', cV), locNames(t, 'cu'))]);
   }
   // ---- PDF ----
   const ops = [], f1 = n => (Math.round(n * 100) / 100).toString(), Y = y => f1(PH - y);
